@@ -1,0 +1,15 @@
+name = "Example for simulation"
+id = "example_simulation"
+
+[directories]
+constraints = ["src/constraints/"]
+sources = ["sim/", "src/modules/"]
+vvp = "build/sim"
+vcd = "build/sim"
+
+[[simulation]]
+id = "structural_hw"
+top-symbol = "tb_shw"
+timescale = "1ns/1ps"
+vvp = "structural_hw.vvp"
+vcd = "structural_hw.vcd"

@@ -1,0 +1,45 @@
+name = "Example for EGO1 FPGA board"
+id = "example_ego1"
+
+[directories]
+constraints = ["src/constraints/"]
+sources = ["sim/", "src/modules/"]
+vvp = "build/vvp/"
+vcd = "build/vcd/"
+synthesis = "build/synth/"
+implementation = "build/impl/"
+bitstream = "build/bits/"
+
+[[simulation]]
+id = "bin2bcd"
+top-symbol = "tb_Bin2Bcd"
+timescale = "1ns/1ps"
+vvp = "bin2bcd.vvp"
+vcd = "bin2bcd.vcd"
+
+[[simulation]]
+id = "bcd2seg7"
+top-symbol = "tb_Bcd2Seg7"
+timescale = "1ns/1ps"
+vvp = "bcd2seg7.vvp"
+vcd = "bcd2seg7.vcd"
+
+[[simulation]]
+id = "tb_driver7seg"
+top-symbol = "tb_Driver7Seg"
+timescale = "1ns/1ps"
+vvp = "tb_driver7seg.vvp"
+vcd = "tb_driver7seg.vcd"
+
+[[fpga]]
+id = "ego1"
+part = "xc7a35tcsg324-1"
+
+[[program]]
+id = "driver7seg"
+fpga = "ego1"
+top-symbol = "Driver7Seg"
+synthesis = "driver7seg.json"
+implementation = "driver7seg.fasm"
+bitstream = "driver7seg.bit"
+constraints = "xilinx.xdc"

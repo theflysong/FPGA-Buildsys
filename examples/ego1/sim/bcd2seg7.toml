@@ -1,0 +1,5 @@
+[[module.export]]
+name = "tb_Bcd2Seg7"
+
+[[module.import]]
+name = "Bcd2Seg7"

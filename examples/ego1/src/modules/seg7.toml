@@ -1,0 +1,8 @@
+[[module.export]]
+name = "Driver7Seg"
+
+[[module.import]]
+name = "Bin2Bcd"
+
+[[module.import]]
+name = "Bcd2Seg7"
