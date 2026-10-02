@@ -1,0 +1,15 @@
+name = "Name to Your Project"
+id = "id_for_your_project"
+
+[directories]
+constraints = ["src/constraints/"]
+sources = ["sim/", "src/modules/"]
+vvp = "build/sim"
+vcd = "build/sim"
+
+[[simulation]]
+id = "example_simulation"
+top-symbol = "tbSimulation"
+timescale = "1ns/1ps"
+vvp = "example.vvp"
+vcd = "example.vcd"

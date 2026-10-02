@@ -54,7 +54,7 @@ directories() {
 }
 
 if (( position == 0 )); then
-    for command in aux script build simulate synthesis implementation bitstream program clean cleandist install completion; do
+    for command in aux script build simulate synthesis implementation bitstream program clean cleandist init install completion; do
         emit "$command"
     done
     exit 0

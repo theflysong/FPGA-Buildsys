@@ -31,6 +31,20 @@ cd [path-to-your-project]
 
 `./buildsys` 和 `./buildsys.sh` 都会将参数转发给 `main.py`, 并自动将脚本所在目录作为 `--project` 参数传递. 这意味着你可以在任何地方运行这些脚本, 只要它们位于你的项目目录中.
 
+在新建的空目录中安装入口后, 可以使用 `init` 创建模板项目:
+
+```sh
+mkdir my-project
+python3 main.py install buildsys my-project
+cd my-project
+./buildsys init
+./buildsys simulate example_simulation
+```
+
+`init` 要求项目目录仅包含 `buildsys`、`buildsys.sh` 两个文件; 如有其他文件或目录（包括隐藏文件）, 会报错并保留现有内容。初始化会复制 `templates/template_project/` 中的配置、Verilog 源码及模块元数据, 保留两个入口脚本。也可使用 `python3 main.py --project [path-to-your-project] init`; 不指定 `--project` 时使用当前目录。
+
+模板测试台 `tbSimulation` 从仿真时间 0 开始依次读取 `Hello,World!`, 每隔 500 ms 切换到下一个地址, 每个字符保持 500 ms, 在 6 秒仿真时间后结束。连续相同字符的数据值保持不变。运行仿真需要 `iverilog` 和 `vvp`, 波形输出到 `build/sim/example.vcd`。这里的时间是仿真时间。
+
 此外, 还可以安装 Bash Tab 补全功能. 这需要 `sudo` 权限, 并且需要将补全文件安装到 `/usr/share/bash-completion/completions` 或其他 Bash 补全搜索路径中:
 
 ```sh
