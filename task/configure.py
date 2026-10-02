@@ -16,11 +16,14 @@ from util import (
 
 
 FPGA_TEMPLATE = '''# 本地 FPGA 配置；相对路径以项目根目录为基准，也支持绝对路径。
-# 必填：Project X-Ray 数据库目录。
+# 必填: Project X-Ray 数据库目录。
 xray-database = ""
 
-# 可选：按列表顺序查找各目录及其 bin/；空列表使用 PATH。
+# 可选: 按列表顺序查找各目录及其 bin/；空列表使用 PATH。
 toolchain-root = []
+
+# FPGA 构建必填: Python 模块搜索目录列表，例如 Project X-Ray 源码目录。
+PYTHONPATH = []
 '''
 
 
@@ -48,10 +51,16 @@ def load_fpga_config(root: Path, fpga: Fpga) -> Fpga:
             f'{path}: toolchain-root must be a list of nonempty strings; '
             'use ["path"] for one directory or [] to use PATH'
         )
+    python_paths = data.get("PYTHONPATH", [])
+    if not isinstance(python_paths, list) or not all(
+        isinstance(value, str) and value.strip() for value in python_paths
+    ):
+        raise ConfigError(f'{path}: PYTHONPATH must be a list of nonempty strings; use ["path"]')
     return replace(
         fpga,
         xray_database=external_path(root, database) if database.strip() else None,
         toolchain_roots=tuple(external_path(root, value) for value in roots),
+        python_paths=tuple(external_path(root, value) for value in python_paths),
     )
 
 
@@ -122,11 +131,11 @@ def configure(root: Path) -> Project:
         if fpga_id in fpgas:
             raise ConfigError(f"{location}: duplicate fpga id {fpga_id!r}")
         part = required_string(raw, "part", location)
-        legacy = [key for key in ("xray-database", "toolchain-root") if key in raw]
+        legacy = [key for key in ("xray-database", "toolchain-root", "PYTHONPATH") if key in raw]
         if legacy:
             path = fpga_config_path(root, fpga_id)
             raise ConfigError(f"{location}: move {', '.join(legacy)} to {path} and remove these fields from configuration.toml")
-        fpgas[fpga_id] = Fpga(fpga_id, part, None, ())
+        fpgas[fpga_id] = Fpga(fpga_id, part, None, (), ())
 
     programs: list[Program] = []
     for index, raw in enumerate(raw_programs, 1):
@@ -201,6 +210,6 @@ def configure(root: Path) -> Project:
     fpgas = {identifier: load_fpga_config(root, fpga) for identifier, fpga in fpgas.items()}
     programs = [replace(program, fpga=fpgas[program.fpga.identifier]) for program in programs]
     for path in created:
-        print(f"Created {path}; fill xray-database before FPGA builds. "
+        print(f"Created {path}; fill xray-database and PYTHONPATH before FPGA builds. "
               "toolchain-root is optional; use [] to use PATH.", file=sys.stderr)
     return Project(root, identifier, tuple(simulations), tuple(programs), exports, imports)

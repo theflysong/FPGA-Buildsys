@@ -88,7 +88,7 @@ class BuildSystemTests(unittest.TestCase):
         )
         (self.root / "configuration.toml").write_text(config)
         (self.root / "build/fpga").mkdir(parents=True)
-        (self.root / "build/fpga/ego1.toml").write_text('xray-database = "database"\n')
+        (self.root / "build/fpga/ego1.toml").write_text('xray-database = "database"\nPYTHONPATH = ["src"]\n')
         (self.root / "constraints").mkdir()
         (self.root / "constraints/board.xdc").write_text("# test constraints\n")
         (self.root / "database/xc7a35tcsg324-1").mkdir(parents=True)

@@ -21,6 +21,7 @@ class Fpga:
     part: str
     xray_database: Path | None
     toolchain_roots: tuple[Path, ...]
+    python_paths: tuple[Path, ...]
 
 
 @dataclass(frozen=True)

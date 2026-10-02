@@ -159,28 +159,33 @@ def program_header(project: Project, program: Program, *, require_database: bool
         f"XRAY_DATABASE={shlex.quote(str(program.fpga.xray_database) if program.fpga.xray_database else '')}",
         "export FPGA_PART XRAY_DATABASE",
     ]
+    python_paths = " ".join(shlex.quote(str(path)) for path in program.fpga.python_paths)
+    lines.append(f"FPGA_PYTHONPATHS=({python_paths})")
     if require_database:
         lines.extend([
             f"FPGA_CONFIG={shlex.quote(relative(project, fpga_config_path(project.root, program.fpga.identifier)))}",
             '[[ -n "$XRAY_DATABASE" ]] || { printf "Fill xray-database in %s, then run buildsys script or the target command to regenerate scripts.\\n" "$FPGA_CONFIG" >&2; exit 2; }',
+            '(( ${#FPGA_PYTHONPATHS[@]} > 0 )) || { printf "Fill PYTHONPATH in %s with Python module directories, then regenerate scripts.\\n" "$FPGA_CONFIG" >&2; exit 2; }',
         ])
     if program.fpga.toolchain_roots:
         roots = " ".join(shlex.quote(str(root)) for root in program.fpga.toolchain_roots)
         lines.extend([
             f"TOOLCHAIN_ROOTS=({roots})",
             'toolchain_path=""',
-            'toolchain_pythonpath=""',
             'for toolchain_root in "${TOOLCHAIN_ROOTS[@]}"; do',
             '  [[ -d "$toolchain_root" ]] || { printf "Missing toolchain root: %s\\n" "$toolchain_root" >&2; exit 2; }',
             '  toolchain_path+="$toolchain_root:$toolchain_root/bin:"',
-            '  if [[ -d "$toolchain_root/src/prjxray" ]]; then',
-            '    toolchain_pythonpath+="$toolchain_root/src/prjxray:"',
-            '  fi',
             'done',
             'export PATH="${toolchain_path}$PATH"',
-            'if [[ -n "$toolchain_pythonpath" ]]; then',
-            '  export PYTHONPATH="${toolchain_pythonpath%:}${PYTHONPATH:+:$PYTHONPATH}"',
-            'fi',
+        ])
+    if program.fpga.python_paths:
+        lines.extend([
+            'fpga_pythonpath=""',
+            'for python_path in "${FPGA_PYTHONPATHS[@]}"; do',
+            '  [[ -d "$python_path" ]] || { printf "Missing PYTHONPATH directory: %s\\n" "$python_path" >&2; exit 2; }',
+            '  fpga_pythonpath+="$python_path:"',
+            'done',
+            'export PYTHONPATH="${fpga_pythonpath%:}${PYTHONPATH:+:$PYTHONPATH}"',
         ])
     return lines
 
@@ -211,6 +216,10 @@ def require_fpga_build(project: Project, target_id: str | None) -> None:
     if target.fpga.xray_database is None:
         path = fpga_config_path(project.root, target.fpga.identifier)
         raise ConfigError(f"{path}: fill xray-database before building program {target_id!r}; toolchain-root is optional")
+
+    if not target.fpga.python_paths:
+        path = fpga_config_path(project.root, target.fpga.identifier)
+        raise ConfigError(f"{path}: fill PYTHONPATH with Python module directories before building program {target_id!r}")
 
 
 def add_target_argument(parser: argparse.ArgumentParser) -> None:

@@ -76,6 +76,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.assertEqual(self.local.stat().st_mode & 0o777, 0o600)
         self.assertIn('xray-database = ""', self.local.read_text())
         self.assertIn('toolchain-root = []', self.local.read_text())
+        self.assertIn('PYTHONPATH = []', self.local.read_text())
         self.assertEqual(self.config.read_bytes(), original)
         self.assertTrue((self.root / "build/aux/main.ys").is_file())
         self.assertTrue((self.root / "build/aux/demo.f").is_file())
@@ -124,7 +125,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.local.parent.mkdir(parents=True)
         toolchain = self.root / "toolchain with spaces"
         toolchain.mkdir()
-        self.local.write_text(f'xray-database = "database"\ntoolchain-root = ["{toolchain}"]\n')
+        self.local.write_text(f'xray-database = "database"\nPYTHONPATH = ["src"]\ntoolchain-root = ["{toolchain}"]\n')
         env = self.fake_tools()
         result = self.cli("synthesis", "main", env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -139,7 +140,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.assertIn("other.toml", pending.stderr)
         self.assertEqual((self.root / "calls").read_bytes(), calls)
         # Reload an absolute database path and a relative toolchain path.
-        self.local.write_text(f'xray-database = "{self.root / "database"}"\ntoolchain-root = ["toolchain with spaces"]\n')
+        self.local.write_text(f'xray-database = "{self.root / "database"}"\nPYTHONPATH = ["src"]\ntoolchain-root = ["toolchain with spaces"]\n')
         self.assertEqual(self.cli("script").returncode, 0)
         self.assertIn(str(toolchain), (self.root / "build/jobs/main/synthesis.sh").read_text())
 
@@ -160,7 +161,7 @@ class FpgaConfigurationTests(unittest.TestCase):
                     'printf "# fake FASM\\n" > "${arg#fasm=}" ;; esac; done\n'
                 )
                 self.local.write_text(
-                    f'xray-database = "database"\ntoolchain-root = ["{toolchain}"]\n'
+                    f'xray-database = "database"\nPYTHONPATH = ["src"]\ntoolchain-root = ["{toolchain}"]\n'
                 )
                 calls = self.root / "calls"
                 calls.unlink(missing_ok=True)
@@ -191,7 +192,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         nextpnr.chmod(0o755)
         env["PATH"] = os.environ["PATH"]
         self.local.write_text(
-            'xray-database = "database"\n'
+            'xray-database = "database"\nPYTHONPATH = ["src"]\n'
             'toolchain-root = ["first root", "second root"]\n'
         )
         result = self.cli("implementation", "main", env=env)
@@ -207,38 +208,83 @@ class FpgaConfigurationTests(unittest.TestCase):
             (root / "src/prjxray").mkdir(parents=True)
             (root / "install/bin").mkdir(parents=True)
             (root / "venv/bin").mkdir(parents=True)
+        python_dirs = (self.root / "python modules first", self.root / "python modules second")
+        for directory in python_dirs:
+            directory.mkdir()
         self.local.write_text(
             'xray-database = "database"\n'
             'toolchain-root = ["first root", "second root"]\n'
+            'PYTHONPATH = ["python modules first", "python modules second"]\n'
         )
         result = self.cli("script")
         self.assertEqual(result.returncode, 0, result.stderr)
         lines = (self.root / "build/jobs/main/synthesis.sh").read_text().splitlines()
-        begin = next(i for i, line in enumerate(lines) if line.startswith("TOOLCHAIN_ROOTS="))
+        begin = next(i for i, line in enumerate(lines) if line.startswith("FPGA_PART="))
         end = next(i for i, line in enumerate(lines) if line.startswith("yosys_script="))
         setup = lines[begin:end]
-        env = dict(os.environ, PYTHONPATH="existing packages")
-        probe = subprocess.run(
-            ["bash", "-c", "\n".join(["set -euo pipefail", *setup,
-                                     'printf "%s\\n" "$PATH" "$PYTHONPATH"'])],
-            env=env, capture_output=True, text=True,
-        )
-        self.assertEqual(probe.returncode, 0, probe.stderr)
-        self.assertEqual(probe.stdout.splitlines(), [
-            f"{first}:{first}/bin:{second}:{second}/bin:{env['PATH']}",
-            f"{first}/src/prjxray:{second}/src/prjxray:existing packages",
-        ])
-        # Omitting the optional list or leaving it empty uses PATH as supplied.
+        for inherited in ("existing packages", None):
+            env = dict(os.environ)
+            if inherited is None:
+                env.pop("PYTHONPATH", None)
+            else:
+                env["PYTHONPATH"] = inherited
+            probe = subprocess.run(
+                ["bash", "-c", "\n".join(["set -euo pipefail", *setup,
+                                         'printf "%s\\n" "$PATH" "$PYTHONPATH"'])],
+                env=env, cwd=self.root, capture_output=True, text=True,
+            )
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            suffix = f":{inherited}" if inherited is not None else ""
+            self.assertEqual(probe.stdout.splitlines(), [
+                f"{first}:{first}/bin:{second}:{second}/bin:{env['PATH']}",
+                f"{python_dirs[0]}:{python_dirs[1]}{suffix}",
+            ])
+        # Executable paths are optional; Python module paths are independent.
         for suffix in ("", "toolchain-root = []\n"):
-            self.local.write_text('xray-database = "database"\n' + suffix)
+            self.local.write_text('xray-database = "database"\nPYTHONPATH = ["src"]\n' + suffix)
             self.assertEqual(self.cli("script").returncode, 0)
             script = (self.root / "build/jobs/main/synthesis.sh").read_text()
             self.assertNotIn("export PATH=", script)
+            self.assertIn("export PYTHONPATH=", script)
+
+    def test_unfilled_pythonpath_blocks_fpga_builds_in_both_entries(self) -> None:
+        self.local.parent.mkdir(parents=True)
+        toolchain = self.root / "toolchain"
+        (toolchain / "src/prjxray").mkdir(parents=True)
+        env = self.fake_tools()
+        # A source tree beneath toolchain-root must not supply implicit PYTHONPATH.
+        for suffix in ("", "PYTHONPATH = []\n"):
+            self.local.write_text(
+                'xray-database = "database"\ntoolchain-root = ["toolchain"]\n' + suffix
+            )
+            generated = self.cli("script", env=env)
+            self.assertEqual(generated.returncode, 0, generated.stderr)
+            script = (self.root / "build/jobs/main/synthesis.sh").read_text()
             self.assertNotIn("export PYTHONPATH=", script)
+            for command in ("synthesis", "implementation", "bitstream"):
+                result = self.cli(command, "main", env=env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout.splitlines(), ["configure"])
+                self.assertIn("fill PYTHONPATH", result.stderr)
+                direct = subprocess.run([str(self.root / "jobs.sh"), command, "main"],
+                                        capture_output=True, text=True, env=env)
+                self.assertEqual(direct.returncode, 2, direct.stderr)
+                self.assertIn("Fill PYTHONPATH", direct.stderr)
+                self.assertIn("ego1.toml", direct.stderr)
+            self.assertFalse((self.root / "calls").exists())
+
+    def test_missing_pythonpath_directory_stops_before_tools(self) -> None:
+        self.local.parent.mkdir(parents=True)
+        self.local.write_text('xray-database = "database"\nPYTHONPATH = ["missing Python modules"]\n')
+        env = self.fake_tools()
+        result = self.cli("synthesis", "main", env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"Missing PYTHONPATH directory: {self.root / 'missing Python modules'}", result.stderr)
+        self.assertFalse((self.root / "calls").exists())
 
     def test_missing_listed_root_reports_its_path_before_tools(self) -> None:
         self.local.parent.mkdir(parents=True)
-        self.local.write_text('xray-database = "database"\ntoolchain-root = ["missing root"]\n')
+        self.local.write_text('xray-database = "database"\nPYTHONPATH = ["src"]\ntoolchain-root = ["missing root"]\n')
         env = self.fake_tools()
         result = self.cli("synthesis", "main", env=env)
         self.assertNotEqual(result.returncode, 0, result.stderr)
@@ -251,7 +297,7 @@ class FpgaConfigurationTests(unittest.TestCase):
 
     def test_cleanup_preserves_user_settings_and_completion_recovers_ids(self) -> None:
         self.local.parent.mkdir(parents=True)
-        self.local.write_text('# user comment\nxray-database = "database"\ntoolchain-root = []\n')
+        self.local.write_text('# user comment\nxray-database = "database"\nPYTHONPATH = ["src"]\ntoolchain-root = []\n')
         self.local.chmod(0o640)
         before = self.local.read_bytes(), self.local.stat().st_mtime_ns, self.local.stat().st_mode
         self.assertEqual(self.cli("script").returncode, 0)
@@ -272,6 +318,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         for text, error in (
             (original.replace('part = "xc7a35tcsg324-1"', 'part = "xc7a35tcsg324-1"\nxray-database = "old"'), "move xray-database"),
             (original.replace('part = "xc7a35tcsg324-1"', 'part = "xc7a35tcsg324-1"\ntoolchain-root = "old"'), "move toolchain-root"),
+            (original.replace('part = "xc7a35tcsg324-1"', 'part = "xc7a35tcsg324-1"\nPYTHONPATH = ["old"]'), "move PYTHONPATH"),
             (original.replace('top-symbol = "core"', 'top-symbol = "missing"'), "no exported top-symbol"),
             (original.replace('fpga = "ego1"', 'fpga = "missing"'), "unknown fpga id"),
         ):
@@ -314,6 +361,10 @@ class FpgaConfigurationTests(unittest.TestCase):
             ('xray-database = "db"\ntoolchain-root = [42]', "toolchain-root must be a list"),
             ('xray-database = "db"\ntoolchain-root = [""]', "toolchain-root must be a list"),
             ('xray-database = "db"\ntoolchain-root = ["   "]', "toolchain-root must be a list"),
+            ('xray-database = "db"\nPYTHONPATH = "path"', "PYTHONPATH must be a list"),
+            ('xray-database = "db"\nPYTHONPATH = [42]', "PYTHONPATH must be a list"),
+            ('xray-database = "db"\nPYTHONPATH = [""]', "PYTHONPATH must be a list"),
+            ('xray-database = "db"\nPYTHONPATH = ["   "]', "PYTHONPATH must be a list"),
         ):
             self.local.write_text(text)
             result = self.cli("aux")

@@ -154,6 +154,9 @@ xray-database = ""
 
 # 可选: 空列表使用 PATH; 每项只查找目录本身及其 bin/.
 toolchain-root = []
+
+# FPGA 构建必填：Python 模块搜索目录列表。
+PYTHONPATH = []
 ```
 
 `toolchain-root` 是路径列表, 可写绝对路径、`~` 或相对项目根目录的路径. 例如:
@@ -164,7 +167,15 @@ toolchain-root = ["FIRST_PATH_TO_ROOT", "SECOND_PATH_TO_ROOT"]
 
 构建系统创建的脚本将按照列表顺序把每项的 `ROOT`、`ROOT/bin/` 加入 `PATH`;
 
-数据库未填写时, `aux`、`script`、仿真和清理仍可执行; 而 `synthesis`、`implementation`、`bitstream` 在调用工具前报出对应本地文件的位置. 已有比特流的 `program` 不要求数据库, 但仍必须显式指定 protocol. 填好设置后重新执行目标命令或 `script` 刷新脚本; 之前生成的 FPGA 构建脚本也会拒绝缺少数据库的流程, 并提示重新生成.
+`PYTHONPATH` 必须在本地 `build/fpga/<fpga-id>.toml` 中显式提供非空目录列表，支持绝对路径、`~` 和相对项目根目录的路径。例如：
+
+```toml
+PYTHONPATH = ["~/opt/fpga/ego1/src/prjxray"]
+```
+
+脚本按列表顺序设置模块搜索路径，并保留原有 `PYTHONPATH`；执行前检查目录存在。系统不再从 `toolchain-root` 推导 Python 模块目录。省略或填写 `[]` 时可以生成辅助文件和脚本、仿真及清理，但 FPGA 构建会提示填写；直接执行 `jobs.sh` 也会校验。已有比特流的烧录不要求填写数据库或 `PYTHONPATH`。填写后重新执行目标命令或 `script` 刷新脚本。
+
+数据库或 `PYTHONPATH` 未填写时, `aux`、`script`、仿真和清理仍可执行; 而 `synthesis`、`implementation`、`bitstream` 在调用工具前报出对应本地文件的位置. 已有比特流的 `program` 不要求数据库或 `PYTHONPATH`, 但仍必须显式指定 protocol. 填好设置后重新执行目标命令或 `script` 刷新脚本; 之前生成的 FPGA 构建脚本也会拒绝缺少数据库或 `PYTHONPATH` 的流程, 并提示重新生成.
 
 ```sh
 ./buildsys script                         # 首次生成本地配置模板和任务脚本
