@@ -30,14 +30,14 @@ class CompletionTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)
         self.root = self.base / "project with spaces"
-        self.aux = self.root / "build/aux"
-        self.aux.mkdir(parents=True)
+        self.auxiliary = self.root / "build/auxiliary"
+        self.auxiliary.mkdir(parents=True)
         # No valid project is needed: only auxiliary file names are read.
         (self.root / "configuration.toml").write_text("invalid TOML [\n")
         for name in ("demo.f", "tb_other.f", "coreprog.ys", "project.map", "project.dep"):
-            (self.aux / name).write_text("exit 99\n")
-        (self.aux / "not_a_file.f").mkdir()
-        (self.aux / "invalid id.f").touch()
+            (self.auxiliary / name).write_text("exit 99\n")
+        (self.auxiliary / "not_a_file.f").mkdir()
+        (self.auxiliary / "invalid id.f").touch()
         installed = subprocess.run(
             [sys.executable, str(ENTRY), "install", str(self.root)],
             capture_output=True, text=True,
@@ -65,10 +65,10 @@ class CompletionTests(unittest.TestCase):
         self.assertFalse((self.root / "build/jobs").exists())
         return result.stdout.splitlines()
 
-    def test_commands_and_missing_aux(self) -> None:
-        shutil.rmtree(self.aux)
+    def test_commands_and_missing_auxiliary(self) -> None:
+        shutil.rmtree(self.auxiliary)
         self.assertEqual(set(self.query()), {
-            "aux", "script", "build", "simulate", "synthesis", "implementation",
+            "auxiliary", "script", "build", "simulate", "synthesis", "implementation",
             "bitstream", "program", "xpr", "clean", "cleandist", "init", "install", "completion",
         })
         self.assertEqual(self.query("sim"), ["simulate"])
@@ -76,7 +76,7 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(self.query("init", ""), [])
         self.assertEqual(self.query("simulate", ""), [])
         self.assertEqual(self.query("clean", ""), [])
-        self.assertFalse(self.aux.exists())
+        self.assertFalse(self.auxiliary.exists())
         result = subprocess.run([sys.executable, str(ENTRY), "completion"],
                                 cwd=self.base, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -92,16 +92,16 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(self.query("simulate", "tb"), ["tb_other"])
         self.assertEqual(self.query("simulate", "", wrapper="buildsys.sh"), ["demo", "tb_other"])
         self.assertEqual(self.query("simulate", "missing"), [])
-        self.assertEqual(self.query("aux", ""), [])
+        self.assertEqual(self.query("auxiliary", ""), [])
         self.assertEqual(self.query("build", "demo", ""), [])
-        (self.aux / "demo.f").unlink()
-        (self.aux / "new.f").touch()
+        (self.auxiliary / "demo.f").unlink()
+        (self.auxiliary / "new.f").touch()
         self.assertEqual(self.query("simulate", ""), ["new", "tb_other"])
         # Stale files with matching stems must not create duplicate clean candidates.
-        (self.aux / "new.ys").touch()
+        (self.auxiliary / "new.ys").touch()
         self.assertEqual(self.query("clean", "").count("new"), 1)
 
-    def test_first_ids_without_aux_or_local_fpga_settings(self) -> None:
+    def test_first_ids_without_auxiliary_or_local_fpga_settings(self) -> None:
         shutil.rmtree(self.root / "build")
         (self.root / "configuration.toml").write_text(
             '[[simulation]]\nid = "tb_first"\n[[simulation]]\nid = "tb_second"\n'
@@ -120,17 +120,17 @@ class CompletionTests(unittest.TestCase):
         local.write_text("invalid TOML [")
         self.assertEqual(self.query("program", ""), ["first_program"])
         self.assertEqual(local.read_text(), "invalid TOML [")
-        self.assertFalse(self.aux.exists())
+        self.assertFalse(self.auxiliary.exists())
 
-    def test_aux_and_configuration_ids_are_merged_for_each_target_type(self) -> None:
+    def test_auxiliary_and_configuration_ids_are_merged_for_each_target_type(self) -> None:
         (self.root / "configuration.toml").write_text(
             '[[simulation]]\nid = "configured_sim"\n[[program]]\nid = "configured_program"\n'
         )
         self.assertEqual(self.query("simulate", ""), ["demo", "tb_other", "configured_sim"])
         self.assertEqual(self.query("simulate", "configured"), ["configured_sim"])
         self.assertEqual(self.query("program", ""), ["coreprog", "configured_program"])
-        (self.aux / "coreprog.ys").unlink()
-        (self.aux / "invalid id.ys").touch()
+        (self.auxiliary / "coreprog.ys").unlink()
+        (self.auxiliary / "invalid id.ys").touch()
         self.assertEqual(self.query("program", ""), ["configured_program"])
         self.assertEqual(set(self.query("clean", "")),
                          {"demo", "tb_other", "configured_sim", "configured_program"})
@@ -217,7 +217,7 @@ if (( ${#COMPREPLY[@]} )); then printf '%s\\n' "${COMPREPLY[@]}"; fi
     @unittest.skipUnless(BOOTSTRAP.is_file(), "bash-completion is not installed")
     def test_lazy_loading_for_both_wrappers_and_paths(self) -> None:
         # Use a temporary completion directory rather than changing the system.
-        shutil.rmtree(self.aux)
+        shutil.rmtree(self.auxiliary)
         (self.root / "configuration.toml").write_text(
             '[[simulation]]\nid = "demo"\n[[simulation]]\nid = "tb_other"\n'
             '[[program]]\nid = "coreprog"\n'
@@ -257,7 +257,7 @@ if (( ${#COMPREPLY[@]} )); then printf '%s\\n' "${COMPREPLY[@]}"; fi
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.splitlines(), expected)
         self.assertFalse((self.base / "side-effects").exists())
-        self.assertFalse(self.aux.exists())
+        self.assertFalse(self.auxiliary.exists())
         self.assertFalse((self.root / "build/fpga").exists())
 
 

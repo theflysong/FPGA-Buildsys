@@ -6,20 +6,20 @@ from pathlib import Path
 
 from models import Project
 from task import COMMANDS
-from task.aux import generate_aux
+from task.auxiliary import generate_auxiliary
 from task.configure import configure
 from task.script import generate_script
 
 
 class Planner:
     TASKS = {
-        "aux": ("configure", "aux generation"),
-        "script": ("configure", "aux generation", "script generation"),
-        "build": ("configure", "aux generation", "script generation", "script execution"),
-        "simulate": ("configure", "aux generation", "script generation", "script execution"),
-        "synthesis": ("configure", "aux generation", "script generation", "script execution"),
-        "implementation": ("configure", "aux generation", "script generation", "script execution"),
-        "bitstream": ("configure", "aux generation", "script generation", "script execution"),
+        "auxiliary": ("configure", "auxiliary generation"),
+        "script": ("configure", "auxiliary generation", "script generation"),
+        "build": ("configure", "auxiliary generation", "script generation", "script execution"),
+        "simulate": ("configure", "auxiliary generation", "script generation", "script execution"),
+        "synthesis": ("configure", "auxiliary generation", "script generation", "script execution"),
+        "implementation": ("configure", "auxiliary generation", "script generation", "script execution"),
+        "bitstream": ("configure", "auxiliary generation", "script generation", "script execution"),
         "clean": ("configure", "script generation", "script execution"),
         "cleandist": ("configure", "script generation", "script execution"),
         "program": ("configure", "script generation", "script execution"),
@@ -37,9 +37,9 @@ class Planner:
                 project = configure(root, command, target_id)
                 if hasattr(workflow, "validate"):
                     workflow.validate(project, target_id)
-            elif task == "aux generation":
+            elif task == "auxiliary generation":
                 assert project is not None
-                generate_aux(project)
+                generate_auxiliary(project)
             elif task == "script generation":
                 assert project is not None
                 if hasattr(workflow, "prepare_script"):

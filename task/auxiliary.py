@@ -9,13 +9,13 @@ from models import Project, SynthesisProgram
 from util import source_closure, yosys_quote
 
 
-def generate_aux(project: Project) -> None:
-    project.aux_dir.mkdir(parents=True, exist_ok=True)
-    if project.command in {"aux", "script"}:
-        (project.aux_dir / f"{project.identifier}.map").write_text(
+def generate_auxiliary(project: Project) -> None:
+    project.auxiliary_dir.mkdir(parents=True, exist_ok=True)
+    if project.command in {"auxiliary", "script"}:
+        (project.auxiliary_dir / f"{project.identifier}.map").write_text(
             json.dumps(project.exports, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        (project.aux_dir / f"{project.identifier}.dep").write_text(
+        (project.auxiliary_dir / f"{project.identifier}.dep").write_text(
             json.dumps(project.imports, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
     for simulation in project.simulations:

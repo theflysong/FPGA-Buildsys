@@ -84,18 +84,18 @@ class Project:
     cleanup_targets: tuple[CleanupTarget, ...] = ()
 
     @property
-    def aux_dir(self) -> Path:
-        return self.root / "build" / "aux"
+    def auxiliary_dir(self) -> Path:
+        return self.root / "build" / "auxiliary"
 
     @property
     def script(self) -> Path:
         return self.root / "jobs.sh"
 
     def filelist(self, simulation: Simulation) -> Path:
-        return self.aux_dir / f"{simulation.identifier}.f"
+        return self.auxiliary_dir / f"{simulation.identifier}.f"
 
     def job_dir(self, item: Simulation | SynthesisProgram | ProgrammingTarget | CleanupTarget) -> Path:
         return self.root / "build" / "jobs" / item.identifier
 
     def yosys_script(self, program: SynthesisProgram) -> Path:
-        return self.aux_dir / f"{program.identifier}.ys"
+        return self.auxiliary_dir / f"{program.identifier}.ys"

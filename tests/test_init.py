@@ -34,7 +34,7 @@ class InitTests(unittest.TestCase):
 
     def test_wrapper_init_from_another_directory_and_repeat(self) -> None:
         wrappers = {name: ((self.root / name).read_bytes(), (self.root / name).stat().st_mode)
-                    for name in ("buildsys", "buildsys.sh")}
+                    for name in ("buildsys", "buildsys.sh", "buildsys.bat")}
         result = self.run_command(str(self.root / "buildsys"), "init")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.base / "configuration.toml").exists())
@@ -42,9 +42,9 @@ class InitTests(unittest.TestCase):
             self.assertEqual((self.root / name).read_bytes(), content)
             self.assertEqual((self.root / name).stat().st_mode, mode)
         # Configuring the new project checks metadata and source dependency resolution.
-        configured = self.run_command(str(self.root / "buildsys"), "aux")
+        configured = self.run_command(str(self.root / "buildsys"), "auxiliary")
         self.assertEqual(configured.returncode, 0, configured.stderr)
-        self.assertIn("sim/tbSimulation.v", (self.root / "build/aux/example_simulation.f").read_text())
+        self.assertIn("sim/tbSimulation.v", (self.root / "build/auxiliary/example_simulation.f").read_text())
         before = self.snapshot()
         repeated = self.run_command(str(self.root / "buildsys"), "init")
         self.assertNotEqual(repeated.returncode, 0)
@@ -54,6 +54,22 @@ class InitTests(unittest.TestCase):
     def test_python_init_defaults_to_current_directory(self) -> None:
         result = self.run_command(sys.executable, str(ENTRY), "init", cwd=self.root)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "configuration.toml").is_file())
+
+    def test_init_accepts_legacy_shell_wrappers(self) -> None:
+        (self.root / "buildsys.bat").unlink()
+        result = self.run_command(sys.executable, str(ENTRY), "init", cwd=self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "configuration.toml").is_file())
+
+    def test_init_accepts_only_batch_wrapper_and_preserves_it(self) -> None:
+        batch = self.root / "buildsys.bat"
+        before = batch.read_bytes()
+        (self.root / "buildsys").unlink()
+        (self.root / "buildsys.sh").unlink()
+        result = self.run_command(sys.executable, str(ENTRY), "init", cwd=self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(batch.read_bytes(), before)
         self.assertTrue((self.root / "configuration.toml").is_file())
 
     def test_init_rejects_extra_content_without_changes(self) -> None:

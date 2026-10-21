@@ -25,7 +25,7 @@ def generate_script(project: Project, simulation: Simulation) -> None:
         f"vvp_file={shlex.quote(vvp_file)}",
         f"vcd_file={shlex.quote(vcd_file)}",
         'if [[ ! -f "$filelist" ]]; then',
-        '  printf "Missing %s; run the Python aux command first.\\n" "$filelist" >&2',
+        '  printf "Missing %s; run the Python auxiliary command first.\\n" "$filelist" >&2',
         '  exit 2',
         'fi',
         'mkdir -p -- "$(dirname -- "$vvp_file")" "$(dirname -- "$vcd_file")"',

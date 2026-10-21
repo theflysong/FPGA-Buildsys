@@ -7,12 +7,20 @@
 该项目要求 Python 3.11+, 前置库见 requirements.txt.
 要使用该系统, 请将仓库克隆到你的项目目录的子目录中.
 
+使用 `xpr` 命令时, 先在当前 Python 环境安装 `requirements.txt` 中的 `pytcl-eda`, 并将 Vivado 加入 PATH. 例如在 Bash 中:
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
 ## 运行示例
 
 你可以通过 python3 脚本运行该构建系统, 如:
 
 ```sh
-python3 main.py --project [path-to-your-project] aux
+python3 main.py --project [path-to-your-project] auxiliary
 python3 main.py --project [path-to-your-project] script
 python3 main.py --project [path-to-your-project] build [target]
 python3 main.py --project [path-to-your-project] simulate [target]
@@ -24,12 +32,22 @@ python3 main.py --project [path-to-your-project] simulate [target]
 python3 main.py install buildsys [path-to-your-project]
 cd [path-to-your-project]
 ./buildsys script
-./buildsys.sh aux
+./buildsys.sh auxiliary
 ./buildsys build [target]
 ./buildsys simulate [target]
 ```
 
-`./buildsys` 和 `./buildsys.sh` 都会将参数转发给 `main.py`, 并自动将脚本所在目录作为 `--project` 参数传递. 这意味着你可以在任何地方运行这些脚本, 只要它们位于你的项目目录中.
+安装命令同时生成 `buildsys`、`buildsys.sh` 和 `buildsys.bat`. 三个入口都会将参数转发给 `main.py`, 并自动将脚本所在目录作为 `--project` 参数传递, 因此可以跨目录调用. Bash 入口使用 PATH 中的 `python3`, Windows 批处理入口使用 PATH 中的 `python`, 可先激活安装了依赖的虚拟环境.
+
+Windows 命令提示符中可使用:
+
+```bat
+python main.py install buildsys C:\path\to\project
+C:\path\to\project\buildsys.bat auxiliary
+C:\path\to\project\buildsys.bat xpr driver7seg
+```
+
+`auxiliary` 命令和 `build/auxiliary/` 目录使用完整名称, 避免 Windows 保留名限制. 已有项目升级后请重新运行 `script` 生成新路径的任务文件. `.bat` 提供 Windows 命令入口; 执行原有 Bash 构建与清理任务仍需要 Bash 及相应工具环境, `xpr` 直接通过 Python 调用 Vivado.
 
 在新建的空目录中安装入口后, 可以使用 `init` 创建模板项目:
 
@@ -41,7 +59,7 @@ cd my-project
 ./buildsys simulate example_simulation
 ```
 
-`init` 要求项目目录仅包含 `buildsys`、`buildsys.sh` 两个文件; 如有其他文件或目录（包括隐藏文件）, 会报错并保留现有内容。初始化会复制 `templates/template_project/` 中的配置、Verilog 源码及模块元数据, 保留两个入口脚本。也可使用 `python3 main.py --project [path-to-your-project] init`; 不指定 `--project` 时使用当前目录。
+`init` 接受仅包含 `buildsys`、`buildsys.sh`、`buildsys.bat` 三个入口的目录, 也兼容旧的两个 Bash 入口或仅有 `buildsys.bat` 的目录; 如有其他文件或目录（包括隐藏文件）, 会报错并保留现有内容。初始化会复制 `templates/template_project/` 中的配置、Verilog 源码及模块元数据, 保留已有入口脚本。也可使用 `python3 main.py --project [path-to-your-project] init`; 不指定 `--project` 时使用当前目录。
 
 模板测试台 `tbSimulation` 从仿真时间 0 开始依次读取 `Hello,World!`, 每隔 500 ms 切换到下一个地址, 每个字符保持 500 ms, 在 6 秒仿真时间后结束。连续相同字符的数据值保持不变。运行仿真需要 `iverilog` 和 `vvp`, 波形输出到 `build/sim/example.vcd`。这里的时间是仿真时间。
 
@@ -59,7 +77,7 @@ sudo python3 main.py install completion /usr/share/bash-completion/completions
 source /usr/share/bash-completion/completions/buildsys
 ```
 
-按 Tab 时, 补全入口调用 `buildsys completion`. 仿真 id 合并 `build/aux/*.f` 与 `configuration.toml` 中的 simulation id, 程序 id 合并 `build/aux/*.ys` 与配置中的 program id, 并去重. 配置中的 id 通过独立的 `completion_ids.py` 只读获取, 不要求目标的其他字段完整. 因此首次构建前、仅构建部分目标后、全项目 `cleandist` 后也能补全所有已配置目标. 删除或改名后仍可能补全旧辅助文件的 id, 可先清除旧辅助文件.
+按 Tab 时, 补全入口调用 `buildsys completion`. 仿真 id 合并 `build/auxiliary/*.f` 与 `configuration.toml` 中的 simulation id, 程序 id 合并 `build/auxiliary/*.ys` 与配置中的 program id, 并去重. 配置中的 id 通过独立的 `completion_ids.py` 只读获取, 不要求目标的其他字段完整. 因此首次构建前、仅构建部分目标后、全项目 `cleandist` 后也能补全所有已配置目标. 删除或改名后仍可能补全旧辅助文件的 id, 可先清除旧辅助文件.
 
 补全不会执行 configure、生成文件、读取 FPGA 本地设置或探测 USB; 配置缺失或无效时静默跳过配置候选, 仍可使用已有辅助文件的 id. 跨目录调用快捷入口时仍读取该入口对应项目的配置.
 
@@ -68,12 +86,12 @@ source /usr/share/bash-completion/completions/buildsys
 该构建系统的构建流程如下所示:
 
 ```
-aux -> script ---|---> build -> simulate
+auxiliary -> script ---|---> build -> simulate
                  |
                  |---> synthesis -> implementation -> bitstream -> program
 ```
 
-指定中间环节的任意一个(除program)都会触发前置环节的执行. 例如, 如果你运行 `build`, 它会先执行 `aux` 和 `script`, 然后再执行 `build`, 从而确保所有依赖都已生成. 你也可以直接运行 `aux` 或 `script`, 以生成辅助文件和脚本, 而不进行构建或仿真.
+指定中间环节的任意一个(除program)都会触发前置环节的执行. 例如, 如果你运行 `build`, 它会先执行 `auxiliary` 和 `script`, 然后再执行 `build`, 从而确保所有依赖都已生成. 你也可以直接运行 `auxiliary` 或 `script`, 以生成辅助文件和脚本, 而不进行构建或仿真.
 
 指定目标时, 配置校验和文件生成按目标及命令阶段进行. 例如 `simulate tb_example` 不要求其他 program 的构建字段或 FPGA 本地设置正确; `synthesis coreprog` 不要求实现、约束或比特流配置完整. 各命令要求如下:
 
@@ -85,11 +103,11 @@ aux -> script ---|---> build -> simulate
 | `bitstream` | 实现所需配置, 加 bitstream/frames 输出 |
 | `program` | 已有 bitstream 的路径、FPGA 引用、可选工具路径、显式 protocol; 无需源码、约束、数据库或 PYTHONPATH |
 | `clean` / `cleandist` | 所选目标的产物路径; 无需源码、约束或 FPGA 本地设置 |
-| `aux` / `script` | 全量配置、全部源码依赖和 FPGA 本地设置格式 |
+| `auxiliary` / `script` | 全量配置、全部源码依赖和 FPGA 本地设置格式 |
 
-所有项目命令仍要求公共配置的 TOML 语法、项目基本信息及全部任务 id 合法且唯一. 构建相关命令还需要扫描全部源码元数据以建立模块索引, 因此元数据必须存在、格式正确且导出符号唯一; 未被当前目标引用的缺失 import 或依赖环不会阻塞该目标. `aux` / `script` 会检查全部源码依赖, 可用于检查整个项目.
+所有项目命令仍要求公共配置的 TOML 语法、项目基本信息及全部任务 id 合法且唯一. 构建相关命令还需要扫描全部源码元数据以建立模块索引, 因此元数据必须存在、格式正确且导出符号唯一; 未被当前目标引用的缺失 import 或依赖环不会阻塞该目标. `auxiliary` / `script` 会检查全部源码依赖, 可用于检查整个项目.
 
-单目标命令只刷新当前阶段及其前置阶段的辅助文件和脚本, 不重写其他目标文件. 项目级 `.map` / `.dep` 仅由 `aux` / `script` 刷新. `jobs.sh` 仍列出全部任务 id, 但尚未生成脚本的任务会提示先运行对应的 buildsys 目标命令或全量 `script`. 项目级及各目标的清理脚本由全量 `script` 生成; CLI 清理使用临时脚本, 不需要预先生成任务脚本.
+单目标命令只刷新当前阶段及其前置阶段的辅助文件和脚本, 不重写其他目标文件. 项目级 `.map` / `.dep` 仅由 `auxiliary` / `script` 刷新. `jobs.sh` 仍列出全部任务 id, 但尚未生成脚本的任务会提示先运行对应的 buildsys 目标命令或全量 `script`. 项目级及各目标的清理脚本由全量 `script` 生成; CLI 清理使用临时脚本, 不需要预先生成任务脚本.
 
 无目标的 `clean` / `cleandist` 校验全部目标的产物路径后才开始删除; 任一产物路径配置错误时不会删除文件. FPGA 本地设置始终保留.
 
@@ -178,7 +196,7 @@ constraints = "xilinx.xdc"
 
 此外, 程序还需要 `[directories]` 配置 `constraints` 的单元素目录数组，以及 `synthesis`、`implementation`、`bitstream` 的目录字符串, 完整示例见 `examples/ego1/configuration.toml`.
 
-第一次所需公共配置校验成功后, `aux` / `script` 会为每个 FPGA 创建 `build/fpga/<fpga-id>.toml`（权限 `0600`）; 单目标 FPGA 构建仅为引用的 FPGA 创建和读取本地文件. 仿真、烧录和清理不会创建这些文件. 比如 `build/fpga/ego1.toml`:
+第一次所需公共配置校验成功后, `auxiliary` / `script` 会为每个 FPGA 创建 `build/fpga/<fpga-id>.toml`（权限 `0600`）; 单目标 FPGA 构建仅为引用的 FPGA 创建和读取本地文件. 仿真、烧录和清理不会创建这些文件. 比如 `build/fpga/ego1.toml`:
 
 ```toml
 # 必填: Project X-Ray 数据库目录; 相对路径以项目根目录为基准, 也支持绝对路径.
@@ -207,7 +225,7 @@ PYTHONPATH = ["~/opt/fpga/ego1/src/prjxray"]
 
 脚本按列表顺序设置模块搜索路径，并保留原有 `PYTHONPATH`；执行前检查目录存在。系统不再从 `toolchain-root` 推导 Python 模块目录。省略或填写 `[]` 时可以生成辅助文件和脚本、仿真及清理，但 FPGA 构建会提示填写；直接执行 `jobs.sh` 也会校验。已有比特流的烧录不要求填写数据库或 `PYTHONPATH`。填写后重新执行目标命令或 `script` 刷新脚本。
 
-数据库或 `PYTHONPATH` 未填写时, `aux`、`script`、仿真和清理仍可执行; 而 `synthesis`、`implementation`、`bitstream` 在调用工具前报出对应本地文件的位置. 已有比特流的 `program` 不要求数据库或 `PYTHONPATH`, 但仍必须显式指定 protocol. 烧录时本地文件不存在则使用 PATH; 存在时要求 TOML 可解析, 仅校验并应用 `toolchain-root`, 不设置或检查 PYTHONPATH 目录. 填好设置后重新执行目标命令或 `script` 刷新脚本; 之前生成的 FPGA 构建脚本也会拒绝缺少数据库或 `PYTHONPATH` 的流程, 并提示重新生成.
+数据库或 `PYTHONPATH` 未填写时, `auxiliary`、`script`、仿真和清理仍可执行; 而 `synthesis`、`implementation`、`bitstream` 在调用工具前报出对应本地文件的位置. 已有比特流的 `program` 不要求数据库或 `PYTHONPATH`, 但仍必须显式指定 protocol. 烧录时本地文件不存在则使用 PATH; 存在时要求 TOML 可解析, 仅校验并应用 `toolchain-root`, 不设置或检查 PYTHONPATH 目录. 填好设置后重新执行目标命令或 `script` 刷新脚本; 之前生成的 FPGA 构建脚本也会拒绝缺少数据库或 `PYTHONPATH` 的流程, 并提示重新生成.
 
 ```sh
 ./buildsys script                         # 首次生成本地配置模板和任务脚本
@@ -217,6 +235,24 @@ PYTHONPATH = ["~/opt/fpga/ego1/src/prjxray"]
 ./buildsys bitstream driver7seg
 ./buildsys program driver7seg --protocol ft2232
 ```
+
+## Vivado 工程导出
+
+在 `[directories]` 中添加单个目录字符串:
+
+```toml
+[directories]
+xpr = "build/xpr"
+```
+
+```sh
+./buildsys xpr driver7seg  # 导出一个 program
+./buildsys xpr            # 为所有 program 分别导出工程
+```
+
+`xpr [program-id]` 通过 `pytcl-eda` 启动 Vivado batch 模式, 生成 `directories.xpr/<program-id>/<program-id>.xpr`. 工程引用该 program 的源码依赖闭包及 XDC 约束, 设置 FPGA part 和顶层模块, 不启动综合或实现. 重复导出会重新生成同名 Vivado 工程. Windows 中可使用 `buildsys.bat xpr [program-id]`.
+
+导出仅要求 `directories.sources`、`directories.constraints`、`directories.xpr`、program 的 `fpga` / `top-symbol` / `constraints` 和对应 FPGA 的 `part`; 不要求 yosys 的产物路径或 FPGA 本地数据库、PYTHONPATH 配置. 省略目标时, 所有 program 均校验通过后才开始调用 Vivado. `auxiliary` 和 `script` 不会自动导出 Vivado 工程.
 
 ## Features
 

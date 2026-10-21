@@ -188,7 +188,7 @@ class XprTests(unittest.TestCase):
         self.assertTrue(any(call[:3] == ["set_property", "file_type", "SystemVerilog"] for call in calls))
         self.assertEqual(calls[-2:], [["update_compile_order", "-fileset", "sources_1"], ["close_project"]])
         self.assertFalse((self.root / "build/fpga").exists())
-        self.assertFalse((self.root / "build/aux").exists())
+        self.assertFalse((self.root / "build/auxiliary").exists())
         self.assertFalse((self.root / "jobs.sh").exists())
         before = xpr.read_bytes(), xpr.stat().st_mtime_ns
         failed = self.cli("xpr")

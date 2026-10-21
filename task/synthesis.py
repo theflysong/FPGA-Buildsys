@@ -22,7 +22,7 @@ def generate_script(project: Project, program: SynthesisProgram) -> None:
     write_executable(job_dir / "synthesis.sh", [
         *header,
         f"yosys_script={shlex.quote(yosys_script)}",
-        '[[ -f "$yosys_script" ]] || { printf "Missing %s; run the Python aux command first.\\n" "$yosys_script" >&2; exit 2; }',
+        '[[ -f "$yosys_script" ]] || { printf "Missing %s; run the Python auxiliary command first.\\n" "$yosys_script" >&2; exit 2; }',
         'command -v yosys >/dev/null || { printf "Missing tool: yosys\\n" >&2; exit 127; }',
         f"mkdir -p -- {shlex.quote(relative(project, program.synthesis.parent))}",
         TMPFS_CHECK,

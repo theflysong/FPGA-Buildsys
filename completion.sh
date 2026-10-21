@@ -28,7 +28,7 @@ emit() {
 target_ids() {
     local extension file identifier kind
     for extension in "$@"; do
-        for file in "$project_dir/build/aux/"*"$extension"; do
+        for file in "$project_dir/build/auxiliary/"*"$extension"; do
             [[ -f $file ]] || continue
             identifier=${file##*/}
             identifier=${identifier%"$extension"}
@@ -50,7 +50,7 @@ directories() {
 }
 
 if (( position == 0 )); then
-    for command in aux script build simulate synthesis implementation bitstream program xpr clean cleandist init install completion; do
+    for command in auxiliary script build simulate synthesis implementation bitstream program xpr clean cleandist init install completion; do
         emit "$command"
     done
     exit 0

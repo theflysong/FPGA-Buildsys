@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import shutil
 
@@ -14,10 +15,14 @@ def run(arguments: argparse.Namespace) -> int:
     if not root.is_dir():
         raise ConfigError(f"{root}: project directory does not exist")
     entries = {path.name: path for path in root.iterdir()}
-    if set(entries) != {"buildsys", "buildsys.sh"} or not all(
+    allowed = ({"buildsys", "buildsys.sh"}, {"buildsys", "buildsys.sh", "buildsys.bat"}, {"buildsys.bat"})
+    if set(entries) not in allowed or not all(
         path.is_file() for path in entries.values()
     ):
-        raise ConfigError(f"{root}: init requires a directory containing only buildsys and buildsys.sh files")
+        raise ConfigError(
+            f"{root}: init requires a directory containing only buildsys and buildsys.sh "
+            "files (optionally buildsys.bat), or only buildsys.bat"
+        )
 
     template = BUILDSYS_DIR / "templates/template_project"
     for source in sorted(template.iterdir()):
@@ -27,5 +32,6 @@ def run(arguments: argparse.Namespace) -> int:
         else:
             shutil.copy2(source, destination)
     print(f"initialized template project in {root}")
-    print("Run ./buildsys simulate example_simulation to generate the example waveform.")
+    launcher = "buildsys.bat" if os.name == "nt" else "./buildsys"
+    print(f"Run {launcher} simulate example_simulation to generate the example waveform.")
     return 0

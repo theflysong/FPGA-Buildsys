@@ -29,7 +29,16 @@ def install_wrappers(directory: Path) -> None:
         'SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"',
         'exec "$SCRIPT_DIR/buildsys.sh" "$@"',
     ])
-    print(f"installed {target / 'buildsys'} and {target / 'buildsys.sh'}")
+    # Batch expands literal percent signs even inside double quotes. Disable
+    # delayed expansion so exclamation marks in project paths survive as well.
+    batch_relative = main_relative.replace("/", "\\").replace("%", "%%")
+    (target / "buildsys.bat").write_bytes((
+        "@echo off\r\n"
+        "setlocal DisableDelayedExpansion\r\n"
+        f'python "%~dp0{batch_relative}" --project "%~dp0." %*\r\n'
+        "exit /b %errorlevel%\r\n"
+    ).encode("utf-8"))
+    print(f"installed {target / 'buildsys'}, {target / 'buildsys.sh'} and {target / 'buildsys.bat'}")
 
 
 def install_completion(directory: Path) -> None:

@@ -151,7 +151,7 @@ class BuildSystemTests(unittest.TestCase):
                          '{"modules":{"core":{}}}\n')
         self.assertFalse((self.root / "build/synth/coreprog.synthesis.log").exists())
         self.assertFalse((self.root / "build/impl/coreprog.implementation.log").exists())
-        yosys_lines = (self.root / "build/aux/coreprog.ys").read_text().splitlines()
+        yosys_lines = (self.root / "build/auxiliary/coreprog.ys").read_text().splitlines()
         self.assertLess(yosys_lines.index("synth_xilinx -family xc7 -top core"),
                         yosys_lines.index("hierarchy -top core -purge_lib"))
         self.assertLess(yosys_lines.index("hierarchy -top core -purge_lib"),
@@ -195,8 +195,8 @@ class BuildSystemTests(unittest.TestCase):
             self.assertTrue((self.root / f"build/jobs/demo/{job}.sh").exists())
         for job in ("synthesis", "implementation", "bitstream"):
             self.assertTrue((self.root / f"build/jobs/prog_demo/{job}.sh").exists())
-        self.assertTrue((self.root / "build/aux/demo.f").exists())
-        self.assertTrue((self.root / "build/aux/prog_demo.ys").exists())
+        self.assertTrue((self.root / "build/auxiliary/demo.f").exists())
+        self.assertTrue((self.root / "build/auxiliary/prog_demo.ys").exists())
         config_path = self.root / "configuration.toml"
         original = config_path.read_text()
         for needle, replacement, error in (
@@ -211,25 +211,25 @@ class BuildSystemTests(unittest.TestCase):
                     changed = changed.replace('implementation = "build/impl"',
                                               'implementation = "build/synth"')
                 config_path.write_text(changed)
-                failure = self.cli("aux")
+                failure = self.cli("auxiliary")
                 self.assertNotEqual(failure.returncode, 0)
                 self.assertIn(error, failure.stderr)
         config_path.write_text(original)
 
-    def test_script_generates_aux_and_dispatches(self) -> None:
+    def test_script_generates_auxiliary_and_dispatches(self) -> None:
         script = self.cli("script")
         self.assertEqual(script.returncode, 0, script.stderr)
         self.assertEqual(script.stdout.splitlines(),
-                         ["configure", "aux generation", "script generation"])
+                         ["configure", "auxiliary generation", "script generation"])
         self.assertTrue((self.root / "jobs.sh").is_file())
         self.assertFalse((self.root / "example.sh").exists())
         for task in ("build", "clean", "simulate"):
             self.assertTrue((self.root / f"build/jobs/demo/{task}.sh").is_file())
-        self.assertEqual(json.loads((self.root / "build/aux/example.map").read_text()),
+        self.assertEqual(json.loads((self.root / "build/auxiliary/example.map").read_text()),
                          {"core": "src/core.v", "tb": "src/tb.v"})
-        self.assertEqual(json.loads((self.root / "build/aux/example.dep").read_text()),
+        self.assertEqual(json.loads((self.root / "build/auxiliary/example.dep").read_text()),
                          {"src/core.v": [], "src/tb.v": ["core"]})
-        filelist = (self.root / "build/aux/demo.f").read_text()
+        filelist = (self.root / "build/auxiliary/demo.f").read_text()
         self.assertIn("+timescale+1ns/1ps", filelist)
         self.assertLess(filelist.index("src/core.v"), filelist.index("src/tb.v"))
         self.assertEqual(self.dispatch("build").returncode, 2)
@@ -261,7 +261,7 @@ class BuildSystemTests(unittest.TestCase):
         self.assertEqual(selected.stdout.splitlines(), ["configure", "script generation", "script execution"])
         self.assertTrue(all(not output.exists() for output in outputs[:2]))
         self.assertTrue(all(output.exists() for output in outputs[2:]))
-        self.assertTrue((self.root / "build/aux/demo.f").exists())
+        self.assertTrue((self.root / "build/auxiliary/demo.f").exists())
         self.assertTrue((self.root / "build/jobs/demo/build.sh").exists())
         self.assertTrue((self.root / "jobs.sh").exists())
 
@@ -269,17 +269,17 @@ class BuildSystemTests(unittest.TestCase):
         self.assertEqual(selected_dist.returncode, 0, selected_dist.stderr)
         self.assertEqual(selected_dist.stdout.splitlines(), ["configure", "script generation", "script execution"])
         self.assertTrue(all(not output.exists() for output in outputs[2:]))
-        self.assertFalse((self.root / "build/aux/prog_demo.ys").exists())
+        self.assertFalse((self.root / "build/auxiliary/prog_demo.ys").exists())
         self.assertFalse((self.root / "build/jobs/prog_demo").exists())
         for shared in ("example.map", "example.dep", "demo.f"):
-            self.assertTrue((self.root / "build/aux" / shared).exists())
+            self.assertTrue((self.root / "build/auxiliary" / shared).exists())
         self.assertTrue((self.root / "build/jobs/demo/build.sh").exists())
         self.assertTrue((self.root / "jobs.sh").exists())
         missing_job = self.dispatch("synthesis", "prog_demo")
         self.assertEqual(missing_job.returncode, 2)
         self.assertIn("run buildsys script", missing_job.stderr)
         self.assertEqual(self.cli("script").returncode, 0)
-        self.assertTrue((self.root / "build/aux/prog_demo.ys").exists())
+        self.assertTrue((self.root / "build/auxiliary/prog_demo.ys").exists())
         self.assertTrue((self.root / "build/jobs/prog_demo/synthesis.sh").exists())
 
         for output in outputs:
@@ -288,16 +288,16 @@ class BuildSystemTests(unittest.TestCase):
         self.assertEqual(cleaned.returncode, 0, cleaned.stderr)
         self.assertEqual(cleaned.stdout.splitlines(), ["configure", "script generation", "script execution"])
         self.assertTrue(all(not output.exists() for output in outputs))
-        self.assertTrue((self.root / "build/aux/example.map").exists())
+        self.assertTrue((self.root / "build/auxiliary/example.map").exists())
         self.assertTrue((self.root / "build/jobs/demo/build.sh").exists())
         self.assertTrue((self.root / "jobs.sh").exists())
 
         dist = self.cli("cleandist")
         self.assertEqual(dist.returncode, 0, dist.stderr)
         self.assertEqual(dist.stdout.splitlines(), ["configure", "script generation", "script execution"])
-        for generated in ("build/aux", "build/jobs", "jobs.sh"):
+        for generated in ("build/auxiliary", "build/jobs", "jobs.sh"):
             self.assertFalse((self.root / generated).exists())
-        for wrapper in ("buildsys", "buildsys.sh"):
+        for wrapper in ("buildsys", "buildsys.sh", "buildsys.bat"):
             self.assertTrue((self.root / wrapper).exists())
         restored = subprocess.run([str(self.root / "buildsys"), "script"],
                                   capture_output=True, text=True)
@@ -327,7 +327,7 @@ class BuildSystemTests(unittest.TestCase):
         self.assertFalse((self.root / outputs[0]).exists())
         project_dist = self.dispatch("cleandist")
         self.assertEqual(project_dist.returncode, 0, project_dist.stderr)
-        for path in ("jobs.sh", "build/aux", "build/jobs"):
+        for path in ("jobs.sh", "build/auxiliary", "build/jobs"):
             self.assertFalse((self.root / path).exists())
         # Python generates only a transient shell task; absent project scripts stay absent.
         pending = set(Path("/dev/shm").glob("buildsys-clean-*.sh"))
@@ -335,7 +335,7 @@ class BuildSystemTests(unittest.TestCase):
         transient = self.cli("clean", "demo")
         self.assertEqual(transient.returncode, 0, transient.stderr)
         self.assertFalse((self.root / outputs[0]).exists())
-        for path in ("jobs.sh", "build/aux", "build/jobs"):
+        for path in ("jobs.sh", "build/auxiliary", "build/jobs"):
             self.assertFalse((self.root / path).exists())
         self.assertEqual(set(Path("/dev/shm").glob("buildsys-clean-*.sh")), pending)
 
@@ -353,7 +353,7 @@ class BuildSystemTests(unittest.TestCase):
         for changed, error in cases:
             with self.subTest(error=error):
                 config.write_text(changed)
-                result = self.cli("aux")
+                result = self.cli("auxiliary")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(error, result.stderr)
                 self.assertIn(str(config), result.stderr)
@@ -364,7 +364,7 @@ class BuildSystemTests(unittest.TestCase):
             self.assertIn("unknown target id", unknown.stderr)
         self.assertEqual(self.cli("script").returncode, 0)
         config.write_text(original.replace('id = "demo"', 'name = "demo"'))
-        old_simulation = self.cli("aux")
+        old_simulation = self.cli("auxiliary")
         self.assertNotEqual(old_simulation.returncode, 0)
         self.assertIn("name is obsolete", old_simulation.stderr)
 
@@ -374,6 +374,11 @@ class BuildSystemTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(install.returncode, 0, install.stderr)
+        batch = (self.root / "buildsys.bat").read_bytes()
+        self.assertTrue(batch.startswith(b"@echo off\r\n"))
+        self.assertNotIn(b"\n", batch.replace(b"\r\n", b""))
+        self.assertIn(b'--project "%~dp0." %*\r\n', batch)
+        self.assertTrue(batch.endswith(b"exit /b %errorlevel%\r\n"))
         for name in ("buildsys", "buildsys.sh"):
             wrapper = self.root / name
             self.assertTrue(wrapper.is_file())
@@ -384,9 +389,9 @@ class BuildSystemTests(unittest.TestCase):
         )
         self.assertEqual(installed.returncode, 0, installed.stderr)
         self.assertTrue((self.root / "jobs.sh").exists())
-        self.assertTrue((self.root / "build/aux/demo.f").exists())
+        self.assertTrue((self.root / "build/auxiliary/demo.f").exists())
         via_shell = subprocess.run(
-            [str(self.root / "buildsys.sh"), "aux"],
+            [str(self.root / "buildsys.sh"), "auxiliary"],
             cwd="/tmp", capture_output=True, text=True, check=False,
         )
         self.assertEqual(via_shell.returncode, 0, via_shell.stderr)
@@ -418,7 +423,7 @@ class BuildSystemTests(unittest.TestCase):
             with self.subTest(error=error):
                 original = path.read_text()
                 path.write_text(content)
-                result = self.cli("aux")
+                result = self.cli("auxiliary")
                 path.write_text(original)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(error, result.stderr)
@@ -442,8 +447,8 @@ class BuildSystemTests(unittest.TestCase):
                 metadata.write_text(original)
                 selected = self.cli("simulate", "demo")
                 self.assertEqual(selected.returncode, 0, selected.stderr)
-                self.assertNotIn("unused.v", (self.root / "build/aux/demo.f").read_text())
-                for command in ("aux", "script"):
+                self.assertNotIn("unused.v", (self.root / "build/auxiliary/demo.f").read_text())
+                for command in ("auxiliary", "script"):
                     full = self.cli(command)
                     self.assertNotEqual(full.returncode, 0)
                     self.assertIn(error, full.stderr)
@@ -473,8 +478,8 @@ class BuildSystemTests(unittest.TestCase):
         self.assertEqual(self.cli("script").returncode, 0)
         files = [*self.root.glob("build/jobs/second/*.sh"),
                  *self.root.glob("build/jobs/_project/*.sh"),
-                 self.root / "build/aux/second.f", self.root / "build/aux/example.map",
-                 self.root / "build/aux/example.dep"]
+                 self.root / "build/auxiliary/second.f", self.root / "build/auxiliary/example.map",
+                 self.root / "build/auxiliary/example.dep"]
         before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in files}
         config = self.root / "configuration.toml"
         config.write_text(config.read_text().replace('top-symbol = "tb_second"', 'top-symbol = "absent"'))
@@ -522,7 +527,7 @@ class BuildSystemTests(unittest.TestCase):
         build = self.cli("build", "demo")
         self.assertEqual(build.returncode, 0, build.stderr)
         self.assertEqual(build.stdout.splitlines()[:4],
-                         ["configure", "aux generation", "script generation", "script execution"])
+                         ["configure", "auxiliary generation", "script generation", "script execution"])
         self.assertTrue((self.root / "build/vvp/demo.vvp").exists())
         self.assertFalse((self.root / "build/vvp/second.vvp").exists())
         self.assertTrue((self.root / "build/jobs/demo/build.sh").exists())
@@ -530,8 +535,8 @@ class BuildSystemTests(unittest.TestCase):
         self.assertFalse((self.root / "build/jobs/demo/clean.sh").exists())
         self.assertFalse((self.root / "build/jobs/second").exists())
         self.assertFalse((self.root / "build/jobs/_project").exists())
-        self.assertFalse((self.root / "build/aux/example.map").exists())
-        self.assertFalse((self.root / "build/aux/example.dep").exists())
+        self.assertFalse((self.root / "build/auxiliary/example.map").exists())
+        self.assertFalse((self.root / "build/auxiliary/example.dep").exists())
         self.assertEqual(set(self.cli("completion", "simulate", "").stdout.splitlines()), {"demo", "second"})
 
         unknown = self.cli("simulate", "missing")
@@ -563,7 +568,7 @@ class BuildSystemTests(unittest.TestCase):
         self.assertEqual(second_clean.returncode, 0, second_clean.stderr)
         self.assertFalse((self.root / "build/vvp/second.vvp").exists())
         self.assertFalse((self.root / "build/vcd/second.vcd").exists())
-        self.assertTrue((self.root / "build/aux/second.f").exists())
+        self.assertTrue((self.root / "build/auxiliary/second.f").exists())
         for path in (self.root / "build/jobs").rglob("*.sh"):
             self.assertEqual(subprocess.run(["bash", "-n", str(path)]).returncode, 0)
 

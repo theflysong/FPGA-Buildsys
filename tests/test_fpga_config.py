@@ -69,7 +69,7 @@ class FpgaConfigurationTests(unittest.TestCase):
 
     def test_first_configure_creates_private_template_only_once(self) -> None:
         original = self.config.read_bytes()
-        result = self.cli("aux")
+        result = self.cli("auxiliary")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(str(self.local), result.stderr)
         self.assertIn("toolchain-root is optional", result.stderr)
@@ -78,8 +78,8 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.assertIn('toolchain-root = []', self.local.read_text())
         self.assertIn('PYTHONPATH = []', self.local.read_text())
         self.assertEqual(self.config.read_bytes(), original)
-        self.assertTrue((self.root / "build/aux/main.ys").is_file())
-        self.assertTrue((self.root / "build/aux/demo.f").is_file())
+        self.assertTrue((self.root / "build/auxiliary/main.ys").is_file())
+        self.assertTrue((self.root / "build/auxiliary/demo.f").is_file())
         before = self.local.read_bytes(), self.local.stat().st_mtime_ns
         again = self.cli("script")
         self.assertEqual(again.returncode, 0, again.stderr)
@@ -162,7 +162,7 @@ class FpgaConfigurationTests(unittest.TestCase):
                 self.config.write_text(text)
                 result = self.cli("simulate", "demo")
                 self.assertEqual(result.returncode, 0, result.stderr)
-                for command in ("aux", "script"):
+                for command in ("auxiliary", "script"):
                     self.assertNotEqual(self.cli(command).returncode, 0)
                 self.assertEqual(self.local.read_text(), "invalid TOML [")
                 self.assertFalse((self.root / "build/jobs/main").exists())
@@ -196,10 +196,10 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.assertEqual((self.root / "build/synth/main.json").read_text(), '{"modules":{}}\n')
         self.assertEqual((self.root / "calls").read_text().splitlines(), [str(self.root / "tools/yosys")])
         self.assertEqual({path.name for path in (self.root / "build/jobs/main").iterdir()}, {"synthesis.sh"})
-        self.assertFalse((self.root / "build/aux/demo.f").exists())
-        self.assertFalse((self.root / "build/aux/mixed.map").exists())
+        self.assertFalse((self.root / "build/auxiliary/demo.f").exists())
+        self.assertFalse((self.root / "build/auxiliary/mixed.map").exists())
         self.assertEqual(other.read_text(), "invalid TOML [")
-        self.assertNotEqual(self.cli("aux").returncode, 0)
+        self.assertNotEqual(self.cli("auxiliary").returncode, 0)
         required = self.cli("implementation", "main", env=env)
         self.assertNotEqual(required.returncode, 0)
         self.assertIn("directories.implementation", required.stderr)
@@ -386,11 +386,11 @@ class FpgaConfigurationTests(unittest.TestCase):
             result = self.cli(*args)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((self.local.read_bytes(), self.local.stat().st_mtime_ns, self.local.stat().st_mode), before)
-        self.assertFalse((self.root / "build/aux").exists())
+        self.assertFalse((self.root / "build/auxiliary").exists())
         self.assertFalse((self.root / "build/jobs").exists())
         self.assertEqual(self.cli("completion", "simulate", "").stdout.splitlines(), ["demo"])
         self.assertEqual(self.cli("completion", "program", "").stdout.splitlines(), ["main"])
-        self.assertFalse((self.root / "build/aux").exists())
+        self.assertFalse((self.root / "build/auxiliary").exists())
         self.assertEqual(self.cli("script").returncode, 0)
         self.assertEqual((self.local.read_bytes(), self.local.stat().st_mtime_ns, self.local.stat().st_mode), before)
 
@@ -404,7 +404,7 @@ class FpgaConfigurationTests(unittest.TestCase):
             (original.replace('fpga = "ego1"', 'fpga = "missing"'), "unknown fpga id"),
         ):
             self.config.write_text(text)
-            result = self.cli("aux")
+            result = self.cli("auxiliary")
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(error, result.stderr)
             self.assertFalse(self.local.parent.exists())
@@ -421,18 +421,18 @@ class FpgaConfigurationTests(unittest.TestCase):
                     old = f'{kind} = "{directory}"\n'
                     replacement = f'{kind} = {value}\n' if value is not None else ""
                     self.config.write_text(original.replace(old, replacement))
-                    result = self.cli("aux")
+                    result = self.cli("auxiliary")
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(str(self.config), result.stderr)
                     self.assertIn(f"directories.{kind} must be a nonempty path string", result.stderr)
                     self.assertFalse((self.root / "build").exists())
         self.config.write_text(original)
         self.assertEqual(self.cli("script").returncode, 0)
-        self.assertTrue((self.root / "build/aux/demo.f").is_file())
-        self.assertTrue((self.root / "build/aux/main.ys").is_file())
+        self.assertTrue((self.root / "build/auxiliary/demo.f").is_file())
+        self.assertTrue((self.root / "build/auxiliary/main.ys").is_file())
 
     def test_local_toml_and_field_types_are_validated(self) -> None:
-        self.assertEqual(self.cli("aux").returncode, 0)
+        self.assertEqual(self.cli("auxiliary").returncode, 0)
         for text, error in (
             ('xray-database = [', "ego1.toml"),
             ('xray-database = 42', "xray-database must be a string"),
@@ -448,7 +448,7 @@ class FpgaConfigurationTests(unittest.TestCase):
             ('xray-database = "db"\nPYTHONPATH = ["   "]', "PYTHONPATH must be a list"),
         ):
             self.local.write_text(text)
-            result = self.cli("aux")
+            result = self.cli("auxiliary")
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(str(self.local), result.stderr)
             self.assertIn(error, result.stderr)

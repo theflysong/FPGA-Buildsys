@@ -152,7 +152,7 @@ def configure(root: Path, command: str = "script", target_id: str | None = None)
     identifier = required_string(data, "id", str(config_path), ID_RE)
     required_string(data, "name", str(config_path))
     entries = task_index(data, config_path)
-    full = command in {"aux", "script"}
+    full = command in {"auxiliary", "script"}
     cleaning = command in {"clean", "cleandist"}
     all_targets = full or (command in {"clean", "cleandist", "xpr"} and target_id is None)
     if not all_targets:
@@ -225,7 +225,7 @@ def configure(root: Path, command: str = "script", target_id: str | None = None)
                 register_output(frames, location)
                 outputs = (*outputs, frames)
             suffix = ".f" if kind == "simulation" else ".ys"
-            cleanup_targets.append(CleanupTarget(task_id, outputs, root / "build/aux" / f"{task_id}{suffix}"))
+            cleanup_targets.append(CleanupTarget(task_id, outputs, root / "build/auxiliary" / f"{task_id}{suffix}"))
             continue
         if kind == "simulation":
             top = required_string(raw, "top-symbol", location, SYMBOL_RE)
@@ -233,7 +233,7 @@ def configure(root: Path, command: str = "script", target_id: str | None = None)
             vvp, vcd = (output(raw, name, location) for name in ("vvp", "vcd"))
             simulations.append(Simulation(task_id, top, timescale, vvp, vcd))
             if full:
-                cleanup_targets.append(CleanupTarget(task_id, (vvp, vcd), root / "build/aux" / f"{task_id}.f"))
+                cleanup_targets.append(CleanupTarget(task_id, (vvp, vcd), root / "build/auxiliary" / f"{task_id}.f"))
             continue
 
         fpga_id = required_string(raw, "fpga", location, ID_RE)
@@ -271,7 +271,7 @@ def configure(root: Path, command: str = "script", target_id: str | None = None)
             raise ConfigError(f"{location}: duplicate output {constraints}")
         programs.append(Program(task_id, fpga, top, synthesis, implementation, constraints, bitstream))
         cleanup_targets.append(CleanupTarget(task_id, (synthesis, implementation, frames, bitstream),
-                                             root / "build/aux" / f"{task_id}.ys"))
+                                             root / "build/auxiliary" / f"{task_id}.ys"))
 
     needs_sources = not cleaning and command != "program"
     exports, imports = source_index(root, directories, config_path) if needs_sources else ({}, {})

@@ -111,7 +111,7 @@ sys.exit(3)
         self.assertEqual(self.calls(), [])
 
     def test_unique_device_uses_existing_bitstream_without_synthesis(self) -> None:
-        auxiliary = self.root / "build/aux/coreprog.ys"
+        auxiliary = self.root / "build/auxiliary/coreprog.ys"
         before = auxiliary.stat().st_mtime_ns
         result = self.cli("program", "coreprog", "--protocol", "ft2232")
         self.assertEqual(result.returncode, 0, result.stderr)
