@@ -59,9 +59,9 @@ sudo python3 main.py install completion /usr/share/bash-completion/completions
 source /usr/share/bash-completion/completions/buildsys
 ```
 
-按 Tab 时, 补全入口调用 `buildsys completion`. 仿真 id 优先来自 `build/aux/*.f`, 程序 id 优先来自 `build/aux/*.ys`; 两类分别判断, 没有对应辅助文件时通过独立的 `completion_ids.py` 只读 `configuration.toml` 中的任务 id. 因此首次构建前、全项目 `cleandist` 后也能补全目标. 已有辅助文件时沿用文件名候选, 不因前缀无匹配而改读配置; 配置修改后可重新生成辅助文件, 删除或改名时先清除旧辅助文件.
+按 Tab 时, 补全入口调用 `buildsys completion`. 仿真 id 合并 `build/aux/*.f` 与 `configuration.toml` 中的 simulation id, 程序 id 合并 `build/aux/*.ys` 与配置中的 program id, 并去重. 配置中的 id 通过独立的 `completion_ids.py` 只读获取, 不要求目标的其他字段完整. 因此首次构建前、仅构建部分目标后、全项目 `cleandist` 后也能补全所有已配置目标. 删除或改名后仍可能补全旧辅助文件的 id, 可先清除旧辅助文件.
 
-补全不会执行 configure、生成文件、读取 FPGA 本地设置或探测 USB; 配置缺失或无效时静默返回空的 id 候选. 跨目录调用快捷入口时仍读取该入口对应项目的配置.
+补全不会执行 configure、生成文件、读取 FPGA 本地设置或探测 USB; 配置缺失或无效时静默跳过配置候选, 仍可使用已有辅助文件的 id. 跨目录调用快捷入口时仍读取该入口对应项目的配置.
 
 ## 构建流程
 
@@ -74,6 +74,24 @@ aux -> script ---|---> build -> simulate
 ```
 
 指定中间环节的任意一个(除program)都会触发前置环节的执行. 例如, 如果你运行 `build`, 它会先执行 `aux` 和 `script`, 然后再执行 `build`, 从而确保所有依赖都已生成. 你也可以直接运行 `aux` 或 `script`, 以生成辅助文件和脚本, 而不进行构建或仿真.
+
+指定目标时, 配置校验和文件生成按目标及命令阶段进行. 例如 `simulate tb_example` 不要求其他 program 的构建字段或 FPGA 本地设置正确; `synthesis coreprog` 不要求实现、约束或比特流配置完整. 各命令要求如下:
+
+| 命令 | 需要的配置 |
+| --- | --- |
+| `build` / `simulate` | 当前 simulation、vvp/vcd 路径、顶层模块及其源码依赖 |
+| `synthesis` | 当前 program 的顶层和源码依赖、综合输出、引用 FPGA 及本地构建设置 |
+| `implementation` | 综合所需配置, 加实现输出和已有约束文件 |
+| `bitstream` | 实现所需配置, 加 bitstream/frames 输出 |
+| `program` | 已有 bitstream 的路径、FPGA 引用、可选工具路径、显式 protocol; 无需源码、约束、数据库或 PYTHONPATH |
+| `clean` / `cleandist` | 所选目标的产物路径; 无需源码、约束或 FPGA 本地设置 |
+| `aux` / `script` | 全量配置、全部源码依赖和 FPGA 本地设置格式 |
+
+所有项目命令仍要求公共配置的 TOML 语法、项目基本信息及全部任务 id 合法且唯一. 构建相关命令还需要扫描全部源码元数据以建立模块索引, 因此元数据必须存在、格式正确且导出符号唯一; 未被当前目标引用的缺失 import 或依赖环不会阻塞该目标. `aux` / `script` 会检查全部源码依赖, 可用于检查整个项目.
+
+单目标命令只刷新当前阶段及其前置阶段的辅助文件和脚本, 不重写其他目标文件. 项目级 `.map` / `.dep` 仅由 `aux` / `script` 刷新. `jobs.sh` 仍列出全部任务 id, 但尚未生成脚本的任务会提示先运行对应的 buildsys 目标命令或全量 `script`. 项目级及各目标的清理脚本由全量 `script` 生成; CLI 清理使用临时脚本, 不需要预先生成任务脚本.
+
+无目标的 `clean` / `cleandist` 校验全部目标的产物路径后才开始删除; 任一产物路径配置错误时不会删除文件. FPGA 本地设置始终保留.
 
 ## 如何配置项目
 
@@ -160,7 +178,7 @@ constraints = "xilinx.xdc"
 
 此外, 程序还需要 `[directories]` 配置 `constraints` 的单元素目录数组，以及 `synthesis`、`implementation`、`bitstream` 的目录字符串, 完整示例见 `examples/ego1/configuration.toml`.
 
-第一次公共配置校验成功后, configure 会为每个 FPGA 创建 `build/fpga/<fpga-id>.toml`（权限 `0600`）, 并提示用户自行填写. 比如 `build/fpga/ego1.toml`:
+第一次所需公共配置校验成功后, `aux` / `script` 会为每个 FPGA 创建 `build/fpga/<fpga-id>.toml`（权限 `0600`）; 单目标 FPGA 构建仅为引用的 FPGA 创建和读取本地文件. 仿真、烧录和清理不会创建这些文件. 比如 `build/fpga/ego1.toml`:
 
 ```toml
 # 必填: Project X-Ray 数据库目录; 相对路径以项目根目录为基准, 也支持绝对路径.
@@ -189,7 +207,7 @@ PYTHONPATH = ["~/opt/fpga/ego1/src/prjxray"]
 
 脚本按列表顺序设置模块搜索路径，并保留原有 `PYTHONPATH`；执行前检查目录存在。系统不再从 `toolchain-root` 推导 Python 模块目录。省略或填写 `[]` 时可以生成辅助文件和脚本、仿真及清理，但 FPGA 构建会提示填写；直接执行 `jobs.sh` 也会校验。已有比特流的烧录不要求填写数据库或 `PYTHONPATH`。填写后重新执行目标命令或 `script` 刷新脚本。
 
-数据库或 `PYTHONPATH` 未填写时, `aux`、`script`、仿真和清理仍可执行; 而 `synthesis`、`implementation`、`bitstream` 在调用工具前报出对应本地文件的位置. 已有比特流的 `program` 不要求数据库或 `PYTHONPATH`, 但仍必须显式指定 protocol. 填好设置后重新执行目标命令或 `script` 刷新脚本; 之前生成的 FPGA 构建脚本也会拒绝缺少数据库或 `PYTHONPATH` 的流程, 并提示重新生成.
+数据库或 `PYTHONPATH` 未填写时, `aux`、`script`、仿真和清理仍可执行; 而 `synthesis`、`implementation`、`bitstream` 在调用工具前报出对应本地文件的位置. 已有比特流的 `program` 不要求数据库或 `PYTHONPATH`, 但仍必须显式指定 protocol. 烧录时本地文件不存在则使用 PATH; 存在时要求 TOML 可解析, 仅校验并应用 `toolchain-root`, 不设置或检查 PYTHONPATH 目录. 填好设置后重新执行目标命令或 `script` 刷新脚本; 之前生成的 FPGA 构建脚本也会拒绝缺少数据库或 `PYTHONPATH` 的流程, 并提示重新生成.
 
 ```sh
 ./buildsys script                         # 首次生成本地配置模板和任务脚本

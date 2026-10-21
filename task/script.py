@@ -1,16 +1,16 @@
-"""Generate the project dispatcher and every configured shell task."""
+"""Generate the dispatcher and the shell tasks required by this command."""
 
 from __future__ import annotations
 
-from models import Project
+from models import ImplementationProgram, Program, ProgrammingTarget, Project, SynthesisProgram
 from util import write_executable
 from . import bitstream, build, clean, cleandist, implementation, program, simulate, synthesis
 
 
 def generate_script(project: Project) -> None:
-    simulation_cases = "|".join(item.identifier for item in project.simulations)
-    program_cases = "|".join(item.identifier for item in project.programs)
-    target_cases = "|".join(item.identifier for item in (*project.simulations, *project.programs))
+    simulation_cases = "|".join(project.simulation_ids)
+    program_cases = "|".join(project.program_ids)
+    target_cases = "|".join((*project.simulation_ids, *project.program_ids))
     dispatcher = [
         "#!/usr/bin/env bash", "set -euo pipefail",
         'PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"',
@@ -37,18 +37,28 @@ def generate_script(project: Project) -> None:
         '      *) printf "Unknown program: %s\\n" "$target" >&2; exit 2 ;;',
         '    esac', '    ;;', '  *) usage ;;', 'esac',
         'job_script="$PROJECT_ROOT/build/jobs/$target/$command.sh"',
-        '[[ -x "$job_script" ]] || { printf "Missing task script: %s; run buildsys script to regenerate it.\\n" "$job_script" >&2; exit 2; }',
+        '[[ -x "$job_script" ]] || { printf "Missing task script: %s; run buildsys script or the corresponding buildsys target command to regenerate it.\\n" "$job_script" >&2; exit 2; }',
         'exec "$job_script" "$@"',
     ]
     write_executable(project.script, dispatcher)
-    for target_id in (None, *(item.identifier for item in (*project.simulations, *project.programs))):
-        clean.generate_script(project, target_id)
-        cleandist.generate_script(project, target_id)
+    if project.command == "script":
+        for target_id in (None, *(item.identifier for item in project.cleanup_targets)):
+            clean.generate_script(project, target_id)
+            cleandist.generate_script(project, target_id)
     for simulation in project.simulations:
         build.generate_script(project, simulation)
-        simulate.generate_script(project, simulation)
+        if project.command in {"script", "simulate"}:
+            simulate.generate_script(project, simulation)
     for target in project.programs:
-        synthesis.generate_script(project, target)
-        implementation.generate_script(project, target)
-        bitstream.generate_script(project, target)
-        program.generate_script(project, target)
+        if isinstance(target, SynthesisProgram):
+            synthesis.generate_script(project, target)
+        if isinstance(target, ImplementationProgram):
+            implementation.generate_script(project, target)
+        if isinstance(target, Program):
+            bitstream.generate_script(project, target)
+            if project.command == "script":
+                program.generate_script(project, ProgrammingTarget(
+                    target.identifier, target.bitstream, target.fpga.toolchain_roots,
+                ))
+        if isinstance(target, ProgrammingTarget):
+            program.generate_script(project, target)

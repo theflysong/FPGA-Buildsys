@@ -124,6 +124,59 @@ sys.exit(3)
         for path in (self.root / "build/jobs").rglob("*.sh"):
             self.assertEqual(subprocess.run(["bash", "-n", str(path)]).returncode, 0)
 
+    def test_program_needs_only_bitstream_and_optional_toolchain_paths(self) -> None:
+        shutil.rmtree(self.root / "src")
+        shutil.rmtree(self.root / "constraints")
+        config = self.root / "configuration.toml"
+        config.write_text(
+            'name = "Programming only"\nid = "example"\n'
+            '[directories]\nbitstream = "build/bits"\n'
+            '[[fpga]]\nid = "ego1"\n'
+            '[[program]]\nid = "coreprog"\nfpga = "ego1"\nbitstream = "core image.bit"\n'
+            '[[simulation]]\nid = "unfinished"\n'
+        )
+        local = self.root / "build/fpga/ego1.toml"
+        for settings in (
+            None,
+            'xray-database = ""\nPYTHONPATH = ["missing python directory"]\n',
+            'xray-database = 42\nPYTHONPATH = "unused invalid field"\n',
+        ):
+            with self.subTest(settings=settings):
+                if settings is None:
+                    local.unlink()
+                else:
+                    local.write_text(settings)
+                self.scan([(1, 2, "0403:6010", "SERIAL_A", "ft2232")])
+                result = self.cli("program", "coreprog", "--protocol", "ft2232")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(len(self.calls()), 4)
+                script = (self.root / "build/jobs/coreprog/program.sh").read_text()
+                self.assertNotIn("PYTHONPATH", script)
+                self.assertNotIn("XRAY_DATABASE", script)
+                self.assertEqual(local.exists(), settings is not None)
+                if settings is not None:
+                    self.assertEqual(local.read_text(), settings)
+                direct = self.dispatch("program", "coreprog", "--protocol", "ft2232")
+                self.assertEqual(direct.returncode, 0, direct.stderr)
+
+    def test_program_uses_configured_toolchain_and_validates_its_own_settings(self) -> None:
+        local = self.root / "build/fpga/ego1.toml"
+        local.write_text('toolchain-root = ["tools"]\nPYTHONPATH = ["missing"]\n')
+        self.env["PATH"] = os.environ["PATH"]
+        result = self.cli("program", "coreprog", "--protocol", "ft2232")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.calls()), 4)
+        for settings, error in (("broken TOML [", "ego1.toml"),
+                                ('toolchain-root = 42', "toolchain-root"),
+                                ('toolchain-root = ["missing"]', "Missing toolchain root")):
+            with self.subTest(settings=settings):
+                local.write_text(settings)
+                self.scan([(1, 2, "0403:6010", "SERIAL_A", "ft2232")])
+                failed = self.cli("program", "coreprog", "--protocol", "ft2232")
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn(error, failed.stderr)
+                self.assertEqual(self.calls(), [])
+
     def test_multiple_devices_require_a_unique_selector(self) -> None:
         devices = [(1, 2, "0403:6010", "SERIAL_A", "ft2232"),
                    (1, 3, "0403:6010", "SERIAL_B", "ft2232")]

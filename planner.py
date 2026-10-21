@@ -23,6 +23,7 @@ class Planner:
         "clean": ("configure", "script generation", "script execution"),
         "cleandist": ("configure", "script generation", "script execution"),
         "program": ("configure", "script generation", "script execution"),
+        "xpr": ("configure", "xpr generation"),
     }
 
     def run(self, root: Path, command: str, target_id: str | None = None,
@@ -33,7 +34,7 @@ class Planner:
         for task in self.TASKS[command]:
             print(task, flush=True)
             if task == "configure":
-                project = configure(root)
+                project = configure(root, command, target_id)
                 if hasattr(workflow, "validate"):
                     workflow.validate(project, target_id)
             elif task == "aux generation":

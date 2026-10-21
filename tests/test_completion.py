@@ -69,7 +69,7 @@ class CompletionTests(unittest.TestCase):
         shutil.rmtree(self.aux)
         self.assertEqual(set(self.query()), {
             "aux", "script", "build", "simulate", "synthesis", "implementation",
-            "bitstream", "program", "clean", "cleandist", "init", "install", "completion",
+            "bitstream", "program", "xpr", "clean", "cleandist", "init", "install", "completion",
         })
         self.assertEqual(self.query("sim"), ["simulate"])
         self.assertEqual(self.query("ini"), ["init"])
@@ -85,7 +85,7 @@ class CompletionTests(unittest.TestCase):
     def test_context_ids_and_live_file_changes(self) -> None:
         for command in ("build", "simulate"):
             self.assertEqual(self.query(command, ""), ["demo", "tb_other"])
-        for command in ("synthesis", "implementation", "bitstream", "program"):
+        for command in ("synthesis", "implementation", "bitstream", "program", "xpr"):
             self.assertEqual(self.query(command, ""), ["coreprog"])
         for command in ("clean", "cleandist"):
             self.assertEqual(set(self.query(command, "")), {"demo", "tb_other", "coreprog"})
@@ -111,6 +111,7 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(self.query("simulate", "tb_f"), ["tb_first"])
         self.assertEqual(self.query("build", ""), ["tb_first", "tb_second"])
         self.assertEqual(self.query("synthesis", "first", wrapper="buildsys.sh"), ["first_program"])
+        self.assertEqual(self.query("xpr", "first"), ["first_program"])
         self.assertEqual(set(self.query("cleandist", "")), {"tb_first", "tb_second", "first_program"})
         self.assertFalse((self.root / "build").exists())
         # Invalid private configuration has no bearing on completion.
@@ -121,17 +122,18 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(local.read_text(), "invalid TOML [")
         self.assertFalse(self.aux.exists())
 
-    def test_aux_priority_and_fallback_for_each_target_type(self) -> None:
+    def test_aux_and_configuration_ids_are_merged_for_each_target_type(self) -> None:
         (self.root / "configuration.toml").write_text(
             '[[simulation]]\nid = "configured_sim"\n[[program]]\nid = "configured_program"\n'
         )
-        self.assertEqual(self.query("simulate", ""), ["demo", "tb_other"])
-        self.assertEqual(self.query("simulate", "configured"), [])
-        self.assertEqual(self.query("program", ""), ["coreprog"])
+        self.assertEqual(self.query("simulate", ""), ["demo", "tb_other", "configured_sim"])
+        self.assertEqual(self.query("simulate", "configured"), ["configured_sim"])
+        self.assertEqual(self.query("program", ""), ["coreprog", "configured_program"])
         (self.aux / "coreprog.ys").unlink()
         (self.aux / "invalid id.ys").touch()
         self.assertEqual(self.query("program", ""), ["configured_program"])
-        self.assertEqual(set(self.query("clean", "")), {"demo", "tb_other", "configured_program"})
+        self.assertEqual(set(self.query("clean", "")),
+                         {"demo", "tb_other", "configured_sim", "configured_program"})
         (self.root / "configuration.toml").unlink()
         self.assertEqual(self.query("program", ""), [])
         self.assertEqual(self.query("simulate", ""), ["demo", "tb_other"])

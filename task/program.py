@@ -6,16 +6,16 @@ import argparse
 from pathlib import Path
 import shlex
 
-from models import Program, Project
+from models import ProgrammingTarget, Project
 from util import (
-    BUILDSYS_DIR, execute_job, program_header, relative, write_executable,
+    BUILDSYS_DIR, execute_job, relative, task_header, toolchain_header, write_executable,
     require_program as validate,
 )
 
 
-def generate_script(project: Project, program: Program) -> None:
+def generate_script(project: Project, program: ProgrammingTarget) -> None:
     job_dir = project.job_dir(program)
-    header = program_header(project, program, require_database=False)
+    header = [*task_header(project), *toolchain_header(program.toolchain_roots)]
     bitstream = relative(project, program.bitstream)
     programming = BUILDSYS_DIR / "templates" / "program.sh"
     write_executable(job_dir / "program.sh", [

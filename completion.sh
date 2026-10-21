@@ -26,23 +26,19 @@ emit() {
 }
 
 target_ids() {
-    local extension file identifier found kind
+    local extension file identifier kind
     for extension in "$@"; do
-        found=0
         for file in "$project_dir/build/aux/"*"$extension"; do
             [[ -f $file ]] || continue
             identifier=${file##*/}
             identifier=${identifier%"$extension"}
             [[ $identifier =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]] || continue
-            found=1
             emit "$identifier"
         done
-        if (( found == 0 )); then
-            if [[ $extension == .f ]]; then kind=simulation; else kind=program; fi
-            while IFS= read -r identifier; do
-                emit "$identifier"
-            done < <(python3 "$script_dir/completion_ids.py" "$project_dir/configuration.toml" "$kind" 2>/dev/null)
-        fi
+        if [[ $extension == .f ]]; then kind=simulation; else kind=program; fi
+        while IFS= read -r identifier; do
+            emit "$identifier"
+        done < <(python3 "$script_dir/completion_ids.py" "$project_dir/configuration.toml" "$kind" 2>/dev/null)
     done
 }
 
@@ -54,7 +50,7 @@ directories() {
 }
 
 if (( position == 0 )); then
-    for command in aux script build simulate synthesis implementation bitstream program clean cleandist init install completion; do
+    for command in aux script build simulate synthesis implementation bitstream program xpr clean cleandist init install completion; do
         emit "$command"
     done
     exit 0
@@ -64,7 +60,7 @@ case ${words[0]} in
     build|simulate)
         if (( position == 1 )); then target_ids .f; fi
         ;;
-    synthesis|implementation|bitstream)
+    synthesis|implementation|bitstream|xpr)
         if (( position == 1 )); then target_ids .ys; fi
         ;;
     clean|cleandist)

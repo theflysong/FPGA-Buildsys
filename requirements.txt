@@ -1,1 +1,2 @@
-# Python 3.11+ standard library only; no pip packages required.
+# Python 3.11+; pytcl-eda is used by the xpr command.
+pytcl-eda==0.3.0

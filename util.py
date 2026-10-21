@@ -9,7 +9,7 @@ import shlex
 import subprocess
 import tomllib
 
-from models import Program, Project, Simulation
+from models import CleanupTarget, Project, SynthesisProgram
 
 
 BUILDSYS_DIR = Path(__file__).resolve().parent
@@ -103,6 +103,10 @@ def metadata_symbols(table: dict, key: str, path: Path) -> tuple[str, ...]:
 
 
 def source_closure(project: Project, top: str) -> list[str]:
+    return source_order(project, project.exports[top])
+
+
+def source_order(project: Project, source: str) -> list[str]:
     ordered: list[str] = []
     visiting: set[str] = set()
     visited: set[str] = set()
@@ -111,9 +115,11 @@ def source_closure(project: Project, top: str) -> list[str]:
         if source in visited:
             return
         if source in visiting:
-            raise ConfigError(f"{project.root / source}: cyclic source dependency")
+            raise ConfigError(f"{project.root / Path(source).with_suffix('.toml')}: cyclic source dependency")
         visiting.add(source)
         for symbol in sorted(project.imports[source]):
+            if symbol not in project.exports:
+                raise ConfigError(f"{project.root / Path(source).with_suffix('.toml')}: unresolved import {symbol!r}")
             dependency = project.exports[symbol]
             if dependency != source:
                 visit(dependency)
@@ -121,7 +127,7 @@ def source_closure(project: Project, top: str) -> list[str]:
         visited.add(source)
         ordered.append(source)
 
-    visit(project.exports[top])
+    visit(source)
     return ordered
 
 
@@ -149,7 +155,22 @@ def fpga_config_path(root: Path, identifier: str) -> Path:
     return root / "build" / "fpga" / f"{identifier}.toml"
 
 
-def program_header(project: Project, program: Program, *, require_database: bool = True) -> list[str]:
+def toolchain_header(toolchain_roots: tuple[Path, ...]) -> list[str]:
+    if not toolchain_roots:
+        return []
+    roots = " ".join(shlex.quote(str(root)) for root in toolchain_roots)
+    return [
+        f"TOOLCHAIN_ROOTS=({roots})",
+        'toolchain_path=""',
+        'for toolchain_root in "${TOOLCHAIN_ROOTS[@]}"; do',
+        '  [[ -d "$toolchain_root" ]] || { printf "Missing toolchain root: %s\\n" "$toolchain_root" >&2; exit 2; }',
+        '  toolchain_path+="$toolchain_root:$toolchain_root/bin:"',
+        'done',
+        'export PATH="${toolchain_path}$PATH"',
+    ]
+
+
+def program_header(project: Project, program: SynthesisProgram) -> list[str]:
     lines = [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
@@ -161,23 +182,12 @@ def program_header(project: Project, program: Program, *, require_database: bool
     ]
     python_paths = " ".join(shlex.quote(str(path)) for path in program.fpga.python_paths)
     lines.append(f"FPGA_PYTHONPATHS=({python_paths})")
-    if require_database:
-        lines.extend([
-            f"FPGA_CONFIG={shlex.quote(relative(project, fpga_config_path(project.root, program.fpga.identifier)))}",
-            '[[ -n "$XRAY_DATABASE" ]] || { printf "Fill xray-database in %s, then run buildsys script or the target command to regenerate scripts.\\n" "$FPGA_CONFIG" >&2; exit 2; }',
-            '(( ${#FPGA_PYTHONPATHS[@]} > 0 )) || { printf "Fill PYTHONPATH in %s with Python module directories, then regenerate scripts.\\n" "$FPGA_CONFIG" >&2; exit 2; }',
-        ])
-    if program.fpga.toolchain_roots:
-        roots = " ".join(shlex.quote(str(root)) for root in program.fpga.toolchain_roots)
-        lines.extend([
-            f"TOOLCHAIN_ROOTS=({roots})",
-            'toolchain_path=""',
-            'for toolchain_root in "${TOOLCHAIN_ROOTS[@]}"; do',
-            '  [[ -d "$toolchain_root" ]] || { printf "Missing toolchain root: %s\\n" "$toolchain_root" >&2; exit 2; }',
-            '  toolchain_path+="$toolchain_root:$toolchain_root/bin:"',
-            'done',
-            'export PATH="${toolchain_path}$PATH"',
-        ])
+    lines.extend([
+        f"FPGA_CONFIG={shlex.quote(relative(project, fpga_config_path(project.root, program.fpga.identifier)))}",
+        '[[ -n "$XRAY_DATABASE" ]] || { printf "Fill xray-database in %s, then run buildsys script or the target command to regenerate scripts.\\n" "$FPGA_CONFIG" >&2; exit 2; }',
+        '(( ${#FPGA_PYTHONPATHS[@]} > 0 )) || { printf "Fill PYTHONPATH in %s with Python module directories, then regenerate scripts.\\n" "$FPGA_CONFIG" >&2; exit 2; }',
+    ])
+    lines.extend(toolchain_header(program.fpga.toolchain_roots))
     if program.fpga.python_paths:
         lines.extend([
             'fpga_pythonpath=""',
@@ -190,8 +200,8 @@ def program_header(project: Project, program: Program, *, require_database: bool
     return lines
 
 
-def selected_targets(project: Project, target_id: str | None) -> tuple[Simulation | Program, ...]:
-    targets: tuple[Simulation | Program, ...] = (*project.simulations, *project.programs)
+def selected_targets(project: Project, target_id: str | None) -> tuple[CleanupTarget, ...]:
+    targets = project.cleanup_targets
     if target_id is None:
         return targets
     for target in targets:
@@ -213,6 +223,7 @@ def require_program(project: Project, target_id: str | None) -> None:
 def require_fpga_build(project: Project, target_id: str | None) -> None:
     require_program(project, target_id)
     target = next(item for item in project.programs if item.identifier == target_id)
+    assert isinstance(target, SynthesisProgram)
     if target.fpga.xray_database is None:
         path = fpga_config_path(project.root, target.fpga.identifier)
         raise ConfigError(f"{path}: fill xray-database before building program {target_id!r}; toolchain-root is optional")

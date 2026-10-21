@@ -425,6 +425,98 @@ class BuildSystemTests(unittest.TestCase):
                 self.assertIn(str(path), result.stderr)
 
     @unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "Icarus Verilog unavailable")
+    def test_only_reachable_source_dependencies_block_a_target(self) -> None:
+        metadata = self.root / "src/tb.toml"
+        original = metadata.read_text()
+        (self.root / "src/unused.v").write_text("module unused; endmodule\n")
+        (self.root / "src/other.v").write_text("module other; endmodule\n")
+        (self.root / "src/other.toml").write_text(
+            '[[module.export]]\nname = "other"\n[[module.import]]\nname = "unused"\n'
+        )
+        for dependency, error in (("missing", "unresolved import"), ("other", "cyclic source dependency")):
+            with self.subTest(dependency=dependency):
+                (self.root / "src/unused.toml").write_text(
+                    '[[module.export]]\nname = "unused"\n'
+                    f'[[module.import]]\nname = "{dependency}"\n'
+                )
+                metadata.write_text(original)
+                selected = self.cli("simulate", "demo")
+                self.assertEqual(selected.returncode, 0, selected.stderr)
+                self.assertNotIn("unused.v", (self.root / "build/aux/demo.f").read_text())
+                for command in ("aux", "script"):
+                    full = self.cli(command)
+                    self.assertNotEqual(full.returncode, 0)
+                    self.assertIn(error, full.stderr)
+                    self.assertIn(".toml", full.stderr)
+                metadata.write_text(original + '[[module.import]]\nname = "unused"\n')
+                reachable = self.cli("build", "demo")
+                self.assertNotEqual(reachable.returncode, 0)
+                self.assertIn(error, reachable.stderr)
+                self.assertIn(".toml", reachable.stderr)
+
+    def test_source_index_errors_still_block_selected_builds(self) -> None:
+        (self.root / "src/unused.v").write_text("module unused; endmodule\n")
+        metadata = self.root / "src/unused.toml"
+        for content, error in ((None, "unused.toml"), ("broken [", "unused.toml"),
+                               ('[[module.export]]\nname = "core"\n', "duplicate export")):
+            with self.subTest(error=error, content=content):
+                if content is not None:
+                    metadata.write_text(content)
+                result = self.cli("build", "demo")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(error, result.stderr)
+                self.assertFalse((self.root / "build").exists())
+
+    @unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "Icarus Verilog unavailable")
+    def test_selected_generation_preserves_shared_maps_and_other_tasks(self) -> None:
+        self.add_second_simulation()
+        self.assertEqual(self.cli("script").returncode, 0)
+        files = [*self.root.glob("build/jobs/second/*.sh"),
+                 *self.root.glob("build/jobs/_project/*.sh"),
+                 self.root / "build/aux/second.f", self.root / "build/aux/example.map",
+                 self.root / "build/aux/example.dep"]
+        before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in files}
+        config = self.root / "configuration.toml"
+        config.write_text(config.read_text().replace('top-symbol = "tb_second"', 'top-symbol = "absent"'))
+        selected = self.cli("simulate", "demo")
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns) for path in files}, before)
+        self.assertNotEqual(self.cli("script").returncode, 0)
+
+    def test_cleanup_uses_only_output_configuration_and_validates_before_deleting(self) -> None:
+        self.add_program(mixed=True)
+        self.assertEqual(self.cli("script").returncode, 0)
+        simulation = self.root / "build/vvp/demo.vvp"
+        program = self.root / "build/bits/core.bit"
+        for path in (simulation, program):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("keep until cleaned")
+        local = self.root / "build/fpga/ego1.toml"
+        local.write_text("broken TOML [")
+        shutil.rmtree(self.root / "src")
+        shutil.rmtree(self.root / "constraints")
+        config = self.root / "configuration.toml"
+        text = config.read_text().replace('fpga = "ego1"', 'fpga = "unknown"')
+        config.write_text(text.replace('bitstream = "core.bit"', 'bitstream = "../unsafe.bit"'))
+        for command in ("clean", "cleandist"):
+            failure = self.cli(command)
+            self.assertNotEqual(failure.returncode, 0)
+            self.assertIn("file name without directories", failure.stderr)
+            self.assertTrue(simulation.exists())
+            self.assertTrue(program.exists())
+            self.assertTrue((self.root / "jobs.sh").exists())
+        selected = self.cli("clean", "demo")
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        self.assertFalse(simulation.exists())
+        self.assertTrue(program.exists())
+        config.write_text(text)
+        cleaned = self.cli("cleandist")
+        self.assertEqual(cleaned.returncode, 0, cleaned.stderr)
+        self.assertFalse(program.exists())
+        self.assertFalse((self.root / "build/jobs").exists())
+        self.assertEqual(local.read_text(), "broken TOML [")
+
+    @unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "Icarus Verilog unavailable")
     def test_selected_build_simulate_and_clean(self) -> None:
         self.add_second_simulation()
         build = self.cli("build", "demo")
@@ -433,22 +525,31 @@ class BuildSystemTests(unittest.TestCase):
                          ["configure", "aux generation", "script generation", "script execution"])
         self.assertTrue((self.root / "build/vvp/demo.vvp").exists())
         self.assertFalse((self.root / "build/vvp/second.vvp").exists())
-        for name in ("demo", "second"):
-            for task in ("build", "clean", "simulate"):
-                self.assertTrue((self.root / f"build/jobs/{name}/{task}.sh").exists())
+        self.assertTrue((self.root / "build/jobs/demo/build.sh").exists())
+        self.assertFalse((self.root / "build/jobs/demo/simulate.sh").exists())
+        self.assertFalse((self.root / "build/jobs/demo/clean.sh").exists())
+        self.assertFalse((self.root / "build/jobs/second").exists())
+        self.assertFalse((self.root / "build/jobs/_project").exists())
+        self.assertFalse((self.root / "build/aux/example.map").exists())
+        self.assertFalse((self.root / "build/aux/example.dep").exists())
+        self.assertEqual(set(self.cli("completion", "simulate", "").stdout.splitlines()), {"demo", "second"})
 
         unknown = self.cli("simulate", "missing")
         self.assertNotEqual(unknown.returncode, 0)
         self.assertIn("unknown simulation", unknown.stderr)
         second_build = self.dispatch("build", "second")
+        self.assertEqual(second_build.returncode, 2)
+        self.assertIn("Missing task script", second_build.stderr)
+        self.assertNotIn("Unknown simulation", second_build.stderr)
+        second_build = self.cli("build", "second")
         self.assertEqual(second_build.returncode, 0, second_build.stderr)
         self.assertTrue((self.root / "build/vvp/second.vvp").exists())
 
-        first_simulation = self.dispatch("simulate", "demo")
+        first_simulation = self.cli("simulate", "demo")
         self.assertEqual(first_simulation.returncode, 0, first_simulation.stderr)
         self.assertTrue((self.root / "build/vcd/demo.vcd").exists())
         self.assertFalse((self.root / "build/vcd/second.vcd").exists())
-        first_clean = self.dispatch("clean", "demo")
+        first_clean = self.cli("clean", "demo")
         self.assertEqual(first_clean.returncode, 0, first_clean.stderr)
         self.assertFalse((self.root / "build/vvp/demo.vvp").exists())
         self.assertFalse((self.root / "build/vcd/demo.vcd").exists())
@@ -458,11 +559,13 @@ class BuildSystemTests(unittest.TestCase):
         second_simulation = self.cli("simulate", "second")
         self.assertEqual(second_simulation.returncode, 0, second_simulation.stderr)
         self.assertTrue((self.root / "build/vcd/second.vcd").exists())
-        second_clean = self.dispatch("clean", "second")
+        second_clean = self.cli("clean", "second")
         self.assertEqual(second_clean.returncode, 0, second_clean.stderr)
         self.assertFalse((self.root / "build/vvp/second.vvp").exists())
         self.assertFalse((self.root / "build/vcd/second.vcd").exists())
         self.assertTrue((self.root / "build/aux/second.f").exists())
+        for path in (self.root / "build/jobs").rglob("*.sh"):
+            self.assertEqual(subprocess.run(["bash", "-n", str(path)]).returncode, 0)
 
 
 if __name__ == "__main__":

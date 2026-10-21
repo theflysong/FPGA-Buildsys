@@ -111,7 +111,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.assertTrue((self.root / "build/vcd/demo.vcd").is_file())
         clean = self.cli("clean")
         self.assertEqual(clean.returncode, 0, clean.stderr)
-        self.assertTrue(self.local.is_file())
+        self.assertFalse(self.local.exists())
         self.assertFalse((self.root / "build/vvp/demo.vvp").exists())
 
     def test_settings_paths_and_only_selected_fpga_blocks_build(self) -> None:
@@ -133,16 +133,97 @@ class FpgaConfigurationTests(unittest.TestCase):
         script = (self.root / "build/jobs/main/synthesis.sh").read_text()
         self.assertIn(str(self.root / "database"), script)
         self.assertIn(str(toolchain), script)
-        self.assertEqual((self.root / "build/fpga/other.toml").stat().st_mode & 0o777, 0o600)
+        self.assertFalse((self.root / "build/fpga/other.toml").exists())
         calls = (self.root / "calls").read_bytes()
         pending = self.cli("synthesis", "other_main", env=env)
         self.assertNotEqual(pending.returncode, 0)
         self.assertIn("other.toml", pending.stderr)
+        self.assertEqual((self.root / "build/fpga/other.toml").stat().st_mode & 0o777, 0o600)
         self.assertEqual((self.root / "calls").read_bytes(), calls)
         # Reload an absolute database path and a relative toolchain path.
         self.local.write_text(f'xray-database = "{self.root / "database"}"\nPYTHONPATH = ["src"]\ntoolchain-root = ["toolchain with spaces"]\n')
         self.assertEqual(self.cli("script").returncode, 0)
         self.assertIn(str(toolchain), (self.root / "build/jobs/main/synthesis.sh").read_text())
+
+    @unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "Icarus unavailable")
+    def test_simulation_ignores_unrelated_program_and_local_errors(self) -> None:
+        original = self.config.read_text()
+        self.local.parent.mkdir(parents=True)
+        self.local.write_text("invalid TOML [")
+        for text in (
+            original,
+            original.replace('fpga = "ego1"', 'fpga = "absent"'),
+            original.replace('synthesis = "main.json"\n', ''),
+            original.replace('part = "xc7a35tcsg324-1"\n', ''),
+            original.replace('constraints = "board.xdc"', 'constraints = "absent.xdc"'),
+            original.replace('synthesis = "build/synth"', 'synthesis = 42'),
+        ):
+            with self.subTest(config=text):
+                self.config.write_text(text)
+                result = self.cli("simulate", "demo")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for command in ("aux", "script"):
+                    self.assertNotEqual(self.cli(command).returncode, 0)
+                self.assertEqual(self.local.read_text(), "invalid TOML [")
+                self.assertFalse((self.root / "build/jobs/main").exists())
+
+    def test_synthesis_ignores_simulation_and_later_stage_fields(self) -> None:
+        self.local.parent.mkdir(parents=True)
+        self.local.write_text('xray-database = "database"\nPYTHONPATH = ["src"]\n')
+        env = self.fake_tools()
+        original = self.config.read_text()
+        for line in (
+            'vvp = "build/vvp"\n', 'vcd = "build/vcd"\n', 'timescale = "1ns/1ps"\n',
+            'implementation = "build/impl"\n', 'bitstream = "build/bits"\n',
+            'implementation = "main.fasm"\n', 'bitstream = "main.bit"\n',
+            'constraints = ["constraints"]\n', 'constraints = "board.xdc"\n',
+        ):
+            original = original.replace(line, '')
+        original += (
+            '[[fpga]]\nid = "other"\n'
+            '[[program]]\nid = "unfinished"\nfpga = "other"\n'
+        )
+        other = self.local.with_name("other.toml")
+        other.write_text("invalid TOML [")
+        self.config.write_text(original)
+        (self.root / "constraints/board.xdc").unlink()
+        # The testbench's missing dependency is outside the program's closure.
+        (self.root / "src/tb.toml").write_text(
+            '[[module.export]]\nname = "tb"\n[[module.import]]\nname = "absent"\n'
+        )
+        result = self.cli("synthesis", "main", env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / "build/synth/main.json").read_text(), '{"modules":{}}\n')
+        self.assertEqual((self.root / "calls").read_text().splitlines(), [str(self.root / "tools/yosys")])
+        self.assertEqual({path.name for path in (self.root / "build/jobs/main").iterdir()}, {"synthesis.sh"})
+        self.assertFalse((self.root / "build/aux/demo.f").exists())
+        self.assertFalse((self.root / "build/aux/mixed.map").exists())
+        self.assertEqual(other.read_text(), "invalid TOML [")
+        self.assertNotEqual(self.cli("aux").returncode, 0)
+        required = self.cli("implementation", "main", env=env)
+        self.assertNotEqual(required.returncode, 0)
+        self.assertIn("directories.implementation", required.stderr)
+
+    def test_implementation_ignores_bitstream_configuration(self) -> None:
+        self.local.parent.mkdir(parents=True)
+        self.local.write_text('xray-database = "database"\nPYTHONPATH = ["src"]\n')
+        self.config.write_text(self.config.read_text()
+                               .replace('bitstream = "build/bits"\n', '')
+                               .replace('bitstream = "main.bit"\n', ''))
+        env = self.fake_tools()
+        (self.root / "tools/nextpnr-himbaechel").write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$0" >> "$CALL_LOG"\n'
+            'for arg do case "$arg" in fasm=*) '
+            'printf "# fake FASM\\n" > "${arg#fasm=}" ;; esac; done\n'
+        )
+        result = self.cli("implementation", "main", env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / "build/impl/main.fasm").read_text(), "# fake FASM\n")
+        self.assertEqual({path.name for path in (self.root / "build/jobs/main").iterdir()},
+                         {"synthesis.sh", "implementation.sh"})
+        required = self.cli("bitstream", "main", env=env)
+        self.assertNotEqual(required.returncode, 0)
+        self.assertIn("directories.bitstream", required.stderr)
 
     def test_tools_are_found_in_root_and_bin(self) -> None:
         self.local.parent.mkdir(parents=True)

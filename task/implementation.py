@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import shlex
 
-from models import Program, Project
+from models import ImplementationProgram, Project
 from util import (
     TMPFS_CHECK, add_target_argument as add_arguments,
     execute_job, program_header, relative, write_executable,
@@ -13,7 +13,7 @@ from util import (
 )
 
 
-def generate_script(project: Project, program: Program) -> None:
+def generate_script(project: Project, program: ImplementationProgram) -> None:
     job_dir = project.job_dir(program)
     header = program_header(project, program)
     synthesis = relative(project, program.synthesis)

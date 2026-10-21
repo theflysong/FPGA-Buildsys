@@ -7,7 +7,7 @@ from pathlib import Path
 import shlex
 import tempfile
 
-from models import Project, Simulation
+from models import Project
 from util import (
     add_optional_target_argument as add_arguments, execute_job, relative,
     selected_targets, selected_targets as validate, task_header, write_executable,
@@ -24,9 +24,7 @@ def cleanup_script(project: Project, target_id: str | None, *, dist: bool,
     # this script and its directory without depending on later file reads.
     lines.append("cleanup() {")
     for target in selected_targets(project, target_id):
-        outputs = ((target.vvp, target.vcd) if isinstance(target, Simulation) else
-                   (target.synthesis, target.implementation, target.frames, target.bitstream))
-        lines.append("  rm -f -- " + " ".join(shlex.quote(relative(project, path)) for path in outputs))
+        lines.append("  rm -f -- " + " ".join(shlex.quote(relative(project, path)) for path in target.outputs))
     if dist:
         if target_id is None:
             lines.extend([
@@ -36,9 +34,8 @@ def cleanup_script(project: Project, target_id: str | None, *, dist: bool,
             ])
         else:
             target = selected_targets(project, target_id)[0]
-            aux = project.filelist(target) if isinstance(target, Simulation) else project.yosys_script(target)
             lines.extend([
-                f"  rm -f -- {shlex.quote(relative(project, aux))}",
+                f"  rm -f -- {shlex.quote(relative(project, target.auxiliary))}",
                 f"  rm -rf -- {shlex.quote(relative(project, project.job_dir(target)))}",
             ])
     lines.extend(["}", "cleanup"])
