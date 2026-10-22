@@ -104,13 +104,20 @@ class XprTests(unittest.TestCase):
             '[[simulation]]\nid = "unfinished_simulation"\n'
         )
         self.config.write_text(self.original)
-        self.tools = self.root / "tools"
-        self.tools.mkdir()
-        self.vivado = self.tools / "vivado"
-        self.vivado.write_text(FAKE_VIVADO)
+        # Keep the launcher's PATH entry free of the project path's semicolon.
+        temporary_tools = tempfile.TemporaryDirectory(prefix="xpr tools ")
+        self.addCleanup(temporary_tools.cleanup)
+        self.tools = Path(temporary_tools.name)
+        self.vivado = self.tools / ("vivado.bat" if os.name == "nt" else "vivado")
+        if os.name == "nt":
+            (self.tools / "fake_vivado.py").write_text(FAKE_VIVADO)
+            self.vivado.write_text(f'@"{sys.executable}" "%~dp0fake_vivado.py" %*\n')
+        else:
+            self.vivado.write_text(FAKE_VIVADO)
         self.vivado.chmod(0o755)
         self.calls = self.root / "calls.jsonl"
-        self.env = dict(os.environ, PATH=f"{self.tools}:{os.environ['PATH']}", XPR_CALLS=str(self.calls))
+        self.env = dict(os.environ, PATH=f"{self.tools}{os.pathsep}{os.environ['PATH']}",
+                        XPR_CALLS=str(self.calls))
 
     def cli(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([sys.executable, str(ENTRY), "--project", str(self.root), *args],

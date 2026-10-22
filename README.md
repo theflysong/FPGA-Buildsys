@@ -252,6 +252,8 @@ xpr = "build/xpr"
 
 `xpr [program-id]` 通过 `pytcl-eda` 启动 Vivado batch 模式, 生成 `directories.xpr/<program-id>/<program-id>.xpr`. 工程引用该 program 的源码依赖闭包及 XDC 约束, 设置 FPGA part 和顶层模块, 不启动综合或实现. 重复导出会重新生成同名 Vivado 工程. Windows 中可使用 `buildsys.bat xpr [program-id]`.
 
+Windows 下请先运行 Vivado 的 `settings64.bat`, 或将安装目录的 `bin` 加入当前终端的 `PATH`, 然后执行 `buildsys.bat xpr`. 构建系统通过 `cmd.exe` 启动 `vivado.bat`; Vivado 子进程会优先使用运行 buildsys 的 Python 所在目录, 并跳过 Microsoft Store 的应用别名目录, 避免 Tcl 桥接选中无法执行的 `python3` 别名.
+
 导出仅要求 `directories.sources`、`directories.constraints`、`directories.xpr`、program 的 `fpga` / `top-symbol` / `constraints` 和对应 FPGA 的 `part`; 不要求 yosys 的产物路径或 FPGA 本地数据库、PYTHONPATH 配置. 省略目标时, 所有 program 均校验通过后才开始调用 Vivado. `auxiliary` 和 `script` 不会自动导出 Vivado 工程.
 
 ## Features
