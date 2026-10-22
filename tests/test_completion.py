@@ -69,11 +69,12 @@ class CompletionTests(unittest.TestCase):
         shutil.rmtree(self.auxiliary)
         self.assertEqual(set(self.query()), {
             "auxiliary", "script", "build", "simulate", "synthesis", "implementation",
-            "bitstream", "program", "xpr", "clean", "cleandist", "init", "install", "completion",
+            "bitstream", "program", "xpr", "clean", "cleandist", "init", "init-venv", "install", "completion",
         })
         self.assertEqual(self.query("sim"), ["simulate"])
-        self.assertEqual(self.query("ini"), ["init"])
+        self.assertEqual(self.query("ini"), ["init", "init-venv"])
         self.assertEqual(self.query("init", ""), [])
+        self.assertEqual(self.query("init-venv", ""), [])
         self.assertEqual(self.query("simulate", ""), [])
         self.assertEqual(self.query("clean", ""), [])
         self.assertFalse(self.auxiliary.exists())

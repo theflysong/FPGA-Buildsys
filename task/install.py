@@ -21,7 +21,21 @@ def install_wrappers(directory: Path) -> None:
         "set -euo pipefail",
         'PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"',
         f"MAIN_REL={shlex.quote(main_relative)}",
-        'exec python3 "$PROJECT_DIR/$MAIN_REL" --project "$PROJECT_DIR" "$@"',
+        'MAIN_PATH="$PROJECT_DIR/$MAIN_REL"',
+        'BUILDSYS_DIR="$(cd -- "$(dirname -- "$MAIN_PATH")" && pwd)"',
+        'VENV_DIR="$BUILDSYS_DIR/.venv"',
+        'if [[ -d "$VENV_DIR" ]]; then',
+        '    if [[ ! -f "$VENV_DIR/bin/activate" || ! -x "$VENV_DIR/bin/python" ]]; then',
+        '        printf "error: incomplete buildsys virtual environment: %s\\n" "$VENV_DIR" >&2',
+        '        exit 1',
+        '    fi',
+        '    if ! source "$VENV_DIR/bin/activate"; then',
+        '        printf "error: failed to activate buildsys virtual environment: %s\\n" "$VENV_DIR" >&2',
+        '        exit 1',
+        '    fi',
+        '    exec "$VENV_DIR/bin/python" "$MAIN_PATH" --project "$PROJECT_DIR" "$@"',
+        'fi',
+        'exec python3 "$MAIN_PATH" --project "$PROJECT_DIR" "$@"',
     ])
     write_executable(target / "buildsys", [
         "#!/usr/bin/env bash",
@@ -35,6 +49,25 @@ def install_wrappers(directory: Path) -> None:
     (target / "buildsys.bat").write_bytes((
         "@echo off\r\n"
         "setlocal DisableDelayedExpansion\r\n"
+        # Use the wrapper's short path for internal batch-to-batch calls. This
+        # prevents a literal percent sign in an installation path from being
+        # treated as an environment-variable expansion by CALL.
+        f'for %%I in ("%~sdp0{batch_relative}") do set "BUILDSYS_DIR=%%~dpI"\r\n'
+        'set "BUILDSYS_VENV=%BUILDSYS_DIR%.venv"\r\n'
+        'if not exist "%BUILDSYS_VENV%\\" goto system_python\r\n'
+        'if not exist "%BUILDSYS_VENV%\\Scripts\\activate.bat" goto incomplete_venv\r\n'
+        'if not exist "%BUILDSYS_VENV%\\Scripts\\python.exe" goto incomplete_venv\r\n'
+        'call "%BUILDSYS_VENV%\\Scripts\\activate.bat"\r\n'
+        'if errorlevel 1 goto activation_failed\r\n'
+        f'"%BUILDSYS_VENV%\\Scripts\\python.exe" "%~dp0{batch_relative}" --project "%~dp0." %*\r\n'
+        "exit /b %errorlevel%\r\n"
+        ":incomplete_venv\r\n"
+        'echo error: incomplete buildsys virtual environment: "%BUILDSYS_VENV%" >&2\r\n'
+        "exit /b 1\r\n"
+        ":activation_failed\r\n"
+        'echo error: failed to activate buildsys virtual environment: "%BUILDSYS_VENV%" >&2\r\n'
+        "exit /b 1\r\n"
+        ":system_python\r\n"
         f'python "%~dp0{batch_relative}" --project "%~dp0." %*\r\n'
         "exit /b %errorlevel%\r\n"
     ).encode("utf-8"))

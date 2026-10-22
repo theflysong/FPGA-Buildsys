@@ -7,13 +7,13 @@
 该项目要求 Python 3.11+, 前置库见 requirements.txt.
 要使用该系统, 请将仓库克隆到你的项目目录的子目录中.
 
-使用 `xpr` 命令时, 先在当前 Python 环境安装 `requirements.txt` 中的 `pytcl-eda`, 并将 Vivado 加入 PATH. 例如在 Bash 中:
+使用 `xpr` 命令时, 先初始化 buildsys 自己的虚拟环境, 并将 Vivado 加入 PATH:
 
 ```sh
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
+./buildsys init-venv
 ```
+
+`init-venv` 会在 `main.py` 所在的 buildsys 目录创建 `.venv/`, 并在其中安装 `requirements.txt` 的 `pytcl-eda`. 之后 `buildsys`、`buildsys.sh` 和 `buildsys.bat` 检测到该环境时会自动激活并使用其中的 Python; 没有该目录时仍使用系统 Python.
 
 ## 运行示例
 
@@ -37,7 +37,7 @@ cd [path-to-your-project]
 ./buildsys simulate [target]
 ```
 
-安装命令同时生成 `buildsys`、`buildsys.sh` 和 `buildsys.bat`. 三个入口都会将参数转发给 `main.py`, 并自动将脚本所在目录作为 `--project` 参数传递, 因此可以跨目录调用. Bash 入口使用 PATH 中的 `python3`, Windows 批处理入口使用 PATH 中的 `python`, 可先激活安装了依赖的虚拟环境.
+安装命令同时生成 `buildsys`、`buildsys.sh` 和 `buildsys.bat`. 三个入口都会将参数转发给 `main.py`, 并自动将脚本所在目录作为 `--project` 参数传递, 因此可以跨目录调用. 入口会根据 `main.py` 的位置选择 buildsys 的 `.venv`; 没有该环境时 Bash 使用 PATH 中的 `python3`, Windows 批处理入口使用 PATH 中的 `python`.
 
 Windows 命令提示符中可使用:
 

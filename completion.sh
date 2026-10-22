@@ -50,7 +50,7 @@ directories() {
 }
 
 if (( position == 0 )); then
-    for command in auxiliary script build simulate synthesis implementation bitstream program xpr clean cleandist init install completion; do
+    for command in auxiliary script build simulate synthesis implementation bitstream program xpr clean cleandist init init-venv install completion; do
         emit "$command"
     done
     exit 0
