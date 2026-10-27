@@ -34,7 +34,7 @@ def generate_script(project: Project) -> None:
         '    [[ "$command" == program || "$#" -eq 0 ]] || usage',
         '    case "$target" in',
         *([f'      {program_cases}) ;;'] if program_cases else []),
-        '      *) printf "Unknown program: %s\\n" "$target" >&2; exit 2 ;;',
+        '      *) printf "Unknown project: %s\\n" "$target" >&2; exit 2 ;;',
         '    esac', '    ;;', '  *) usage ;;', 'esac',
         'job_script="$PROJECT_ROOT/build/jobs/$target/$command.sh"',
         '[[ -x "$job_script" ]] || { printf "Missing task script: %s; run buildsys script or the corresponding buildsys target command to regenerate it.\\n" "$job_script" >&2; exit 2; }',

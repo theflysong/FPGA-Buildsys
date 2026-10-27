@@ -20,6 +20,7 @@
 你可以通过 python3 脚本运行该构建系统, 如:
 
 ```sh
+python3 main.py --project [path-to-your-project] model
 python3 main.py --project [path-to-your-project] auxiliary
 python3 main.py --project [path-to-your-project] script
 python3 main.py --project [path-to-your-project] build [target]
@@ -77,7 +78,7 @@ sudo python3 main.py install completion /usr/share/bash-completion/completions
 source /usr/share/bash-completion/completions/buildsys
 ```
 
-按 Tab 时, 补全入口调用 `buildsys completion`. 仿真 id 合并 `build/auxiliary/*.f` 与 `configuration.toml` 中的 simulation id, 程序 id 合并 `build/auxiliary/*.ys` 与配置中的 program id, 并去重. 配置中的 id 通过独立的 `completion_ids.py` 只读获取, 不要求目标的其他字段完整. 因此首次构建前、仅构建部分目标后、全项目 `cleandist` 后也能补全所有已配置目标. 删除或改名后仍可能补全旧辅助文件的 id, 可先清除旧辅助文件.
+按 Tab 时, 补全入口调用 `buildsys completion`. 仿真 id 合并 `build/auxiliary/*.f` 与 `configuration.toml` 中的 simulation id, 设计 id 合并 `build/auxiliary/*.ys` 与配置中的 project id, 并去重. `xpr` 命令仅补全 `[[xpr]]` 的 id. 配置中的 id 通过独立的 `completion_ids.py` 只读获取, 不要求目标的其他字段完整. 因此首次构建前、仅构建部分目标后、全项目 `cleandist` 后也能补全所有已配置目标. 删除或改名后仍可能补全旧辅助文件的 id, 可先清除旧辅助文件.
 
 补全不会执行 configure、生成文件、读取 FPGA 本地设置或探测 USB; 配置缺失或无效时静默跳过配置候选, 仍可使用已有辅助文件的 id. 跨目录调用快捷入口时仍读取该入口对应项目的配置.
 
@@ -86,30 +87,36 @@ source /usr/share/bash-completion/completions/buildsys
 该构建系统的构建流程如下所示:
 
 ```
-auxiliary -> script ---|---> build -> simulate
+configure -> model -> auxiliary -> script ---|---> build -> simulate
                  |
                  |---> synthesis -> implementation -> bitstream -> program
 ```
 
-指定中间环节的任意一个(除program)都会触发前置环节的执行. 例如, 如果你运行 `build`, 它会先执行 `auxiliary` 和 `script`, 然后再执行 `build`, 从而确保所有依赖都已生成. 你也可以直接运行 `auxiliary` 或 `script`, 以生成辅助文件和脚本, 而不进行构建或仿真.
+指定中间环节的任意一个(除program)都会触发前置环节的执行. 例如, `build` 会先执行 `configure`、`model`、`auxiliary` 和 `script`, 再开始构建. `model` 可单独生成符号表和文件依赖图; `auxiliary` 继续生成编译器辅助文件, `script` 继续生成任务脚本. `xpr` 执行 `configure → model → xpr`, 清理、烧录和补全跳过 model.
 
-指定目标时, 配置校验和文件生成按目标及命令阶段进行. 例如 `simulate tb_example` 不要求其他 program 的构建字段或 FPGA 本地设置正确; `synthesis coreprog` 不要求实现、约束或比特流配置完整. 各命令要求如下:
+指定目标时, 配置校验和文件生成按目标及命令阶段进行. 例如 `simulate tb_example` 不要求其他 project 的构建字段或 FPGA 本地设置正确; `synthesis coreprog` 不要求实现、约束或比特流配置完整. 各命令要求如下:
 
 | 命令 | 需要的配置 |
 | --- | --- |
+| `model` | 公共项目配置、源码目录及全部源码元数据; 无需任务构建字段或 FPGA 本地设置 |
 | `build` / `simulate` | 当前 simulation、vvp/vcd 路径、顶层模块及其源码依赖 |
-| `synthesis` | 当前 program 的顶层和源码依赖、综合输出、引用 FPGA 及本地构建设置 |
+| `synthesis` | 当前 project 的顶层和源码依赖、综合输出、引用 FPGA 及本地构建设置 |
 | `implementation` | 综合所需配置, 加实现输出和已有约束文件 |
 | `bitstream` | 实现所需配置, 加 bitstream/frames 输出 |
 | `program` | 已有 bitstream 的路径、FPGA 引用、可选工具路径、显式 protocol; 无需源码、约束、数据库或 PYTHONPATH |
+| `xpr` | 当前 xpr 引用的 project、simulations、源码依赖、约束、FPGA part 和 xpr 输出目录 |
 | `clean` / `cleandist` | 所选目标的产物路径; 无需源码、约束或 FPGA 本地设置 |
 | `auxiliary` / `script` | 全量配置、全部源码依赖和 FPGA 本地设置格式 |
 
-所有项目命令仍要求公共配置的 TOML 语法、项目基本信息及全部任务 id 合法且唯一. 构建相关命令还需要扫描全部源码元数据以建立模块索引, 因此元数据必须存在、格式正确且导出符号唯一; 未被当前目标引用的缺失 import 或依赖环不会阻塞该目标. `auxiliary` / `script` 会检查全部源码依赖, 可用于检查整个项目.
+所有项目命令仍要求公共配置的 TOML 语法、项目基本信息及 simulation/project 任务 id 合法且唯一. `[[xpr]]` 的 id 使用独立命名空间, 可以与 project id 相同; 导出时要求全部 xpr id 合法且唯一. model 阶段扫描全部源码元数据以建立符号索引, 因此元数据必须存在、格式正确且导出符号唯一; 未被当前目标引用的缺失 import 或依赖环不会阻塞该目标. `model` / `auxiliary` / `script` 会检查全部源码依赖, 可用于检查整个项目. 公开配置及源码验证通过后才初始化 FPGA 本地设置; 单独运行 `model` 不读取或创建这些设置.
 
-单目标命令只刷新当前阶段及其前置阶段的辅助文件和脚本, 不重写其他目标文件. 项目级 `.map` / `.dep` 仅由 `auxiliary` / `script` 刷新. `jobs.sh` 仍列出全部任务 id, 但尚未生成脚本的任务会提示先运行对应的 buildsys 目标命令或全量 `script`. 项目级及各目标的清理脚本由全量 `script` 生成; CLI 清理使用临时脚本, 不需要预先生成任务脚本.
+每个源文件生成两份 JSON: `build/symbol/<hash>.json` 保存 `path`、`import`、`export`, `build/model/<hash>.json` 保存 `path`、`dependencies`、`closure`. `path` 及所有依赖路径均相对于 `configuration.toml` 所在目录, 使用 `/` 分隔; `<hash>` 是该源文件相对路径 UTF-8 字节的 SHA-256 完整十六进制值. `dependencies` 为去重的直接依赖, `closure` 为依赖优先排列的全部前置文件, 两者都不包含自身. 同文件导出的符号之间引用不会产生文件依赖.
 
-无目标的 `clean` / `cleandist` 校验全部目标的产物路径后才开始删除; 任一产物路径配置错误时不会删除文件. FPGA 本地设置始终保留.
+`model` / `auxiliary` / `script` 更新全部模型并移除失效的哈希 JSON; 单目标构建和 xpr 仅更新所选目标可达文件的模型. 内容未变的 JSON 保留修改时间. `auxiliary` 仅生成 `.f`、`.ys`, 不再生成旧的项目级 `.map` / `.dep`; 已有旧文件可由全项目 `cleandist` 清除.
+
+单目标命令只刷新当前阶段及其前置阶段的文件, 保留其他目标的模型、辅助文件和脚本. `jobs.sh` 仍列出全部任务 id, 但尚未生成脚本的任务会提示先运行对应的 buildsys 目标命令或全量 `script`. 项目级及各目标的清理脚本由全量 `script` 生成; CLI 清理使用临时脚本, 不需要预先生成任务脚本.
+
+无目标的 `clean` / `cleandist` 校验全部目标的产物路径后才开始删除; 任一产物路径配置错误时不会删除文件. `clean` 和单目标 `cleandist` 保留共享模型; 全项目 `cleandist` 删除 `build/model/` 和 `build/symbol/`. FPGA 本地设置始终保留.
 
 ## 如何配置项目
 
@@ -120,7 +127,8 @@ name = "Example testbench"
 id = "example"
 
 [directories]
-sources = ["sim/", "src/modules/"]
+sources = ["src/modules/"]
+simulation = ["sim/"]
 vvp = "build/vvp"
 vcd = "build/vcd"
 
@@ -132,7 +140,7 @@ vvp = "tb_example.vvp"
 vcd = "tb_example.vcd"
 ```
 
-`[directories]` 中的产物目录 `vvp`、`vcd`、`synthesis`、`implementation`、`bitstream` 使用单个非空字符串，例如 `vvp = "build/vvp"`; 原来的数组写法会报配置错误。输入目录 `sources`、`constraints` 继续使用字符串数组，`constraints` 当前要求一个目录。所有路径以项目根目录为基准。
+`[directories]` 中的产物目录 `vvp`、`vcd`、`synthesis`、`implementation`、`bitstream` 使用单个非空字符串，例如 `vvp = "build/vvp"`; 原来的数组写法会报配置错误。输入目录 `sources`、可选的 `simulation`、`constraints` 使用字符串数组，`constraints` 当前要求一个目录。model 扫描 `sources` 与 `simulation` 中的 `.v` / `.sv`, 重叠路径去重。构建与仿真仍兼容将测试台目录列入 `sources` 的旧配置; Vivado 导出则按目录区分归属: `sources` 中的文件放入设计文件集, 显式列入 `simulation` 的目录用于仿真文件集（重叠时优先按 simulation 归类）。所有路径以项目根目录为基准。
 
 指定 `top-symbol` 之后, 构建系统会在源码目录下搜索含有 `top-symbol` 的模块, 将其作为仿真的顶层模块,
 并自动导入依赖模块所在的源文件并编排顺序. 这需要你的源码(`.v`文件)含有对应的元数据描述文件(`.toml`文件).
@@ -177,14 +185,14 @@ name = "module2"
 
 ## FPGA 综合, 实现, 比特流生成与烧录
 
-需要在 `configuration.toml` 中配置 FPGA 和程序, 例如:
+需要在 `configuration.toml` 中用 `[[fpga]]` 配置器件、用 `[[project]]` 配置设计, 例如:
 
 ```toml
 [[fpga]]
 id = "ego1"
 part = "xc7a35tcsg324-1"
 
-[[program]]
+[[project]]
 id = "driver7seg"
 fpga = "ego1"
 top-symbol = "Driver7Seg"
@@ -194,7 +202,7 @@ bitstream = "driver7seg.bit"
 constraints = "xilinx.xdc"
 ```
 
-此外, 程序还需要 `[directories]` 配置 `constraints` 的单元素目录数组，以及 `synthesis`、`implementation`、`bitstream` 的目录字符串, 完整示例见 `examples/ego1/configuration.toml`.
+旧的 `[[program]]` 必须改为 `[[project]]`; 烧录命令仍为 `buildsys program <project-id>`. 设计还需要 `[directories]` 配置 `constraints` 的单元素目录数组，以及 `synthesis`、`implementation`、`bitstream` 的目录字符串, 完整示例见 `examples/ego1/configuration.toml`.
 
 第一次所需公共配置校验成功后, `auxiliary` / `script` 会为每个 FPGA 创建 `build/fpga/<fpga-id>.toml`（权限 `0600`）; 单目标 FPGA 构建仅为引用的 FPGA 创建和读取本地文件. 仿真、烧录和清理不会创建这些文件. 比如 `build/fpga/ego1.toml`:
 
@@ -238,23 +246,34 @@ PYTHONPATH = ["~/opt/fpga/ego1/src/prjxray"]
 
 ## Vivado 工程导出
 
-在 `[directories]` 中添加单个目录字符串:
+在 `[directories]` 中配置输出目录, 并用独立的 `[[xpr]]` 声明要导出的工程:
 
 ```toml
 [directories]
 xpr = "build/xpr"
+
+[[xpr]]
+id = "driver7seg_vivado"
+project = "driver7seg"
+simulations = ["bin2bcd", "bcd2seg7", "tb_driver7seg"]
 ```
 
 ```sh
-./buildsys xpr driver7seg  # 导出一个 program
-./buildsys xpr            # 为所有 program 分别导出工程
+./buildsys xpr driver7seg_vivado  # 导出指定 xpr
+./buildsys xpr                   # 导出所有 [[xpr]]
 ```
 
-`xpr [program-id]` 通过 `pytcl-eda` 启动 Vivado batch 模式, 生成 `directories.xpr/<program-id>/<program-id>.xpr`. 工程引用该 program 的源码依赖闭包及 XDC 约束, 设置 FPGA part 和顶层模块, 不启动综合或实现. 重复导出会重新生成同名 Vivado 工程. Windows 中可使用 `buildsys.bat xpr [program-id]`.
+`xpr [xpr-id]` 通过 `pytcl-eda` 启动 Vivado batch 模式, 生成 `directories.xpr/<xpr-id>/<xpr-id>.xpr`. `project` 必须引用一个 `[[project]]` 的 id. 设计顶层与依赖、所选仿真引用的设计依赖统一加入 `sources_1`; 设计引用 `directories.simulation` 中的文件会报配置错误. XDC 约束加入 `constrs_1`, 并设置 FPGA part 和设计顶层模块.
+
+每个 `simulations` id 必须引用一个 `[[simulation]]`, 创建独立的 `sim_<simulation-id>` 文件集, 只加入其依赖闭包中来自 `directories.simulation` 的文件. 来自 `directories.sources` 的模块保留在设计文件集, 通过 `SOURCE_SET = sources_1` 提供给仿真. 未被任何所选仿真引用的设计文件设置 `USED_IN_SIMULATION = false`, 例如仅用于板上设计的 `main.v`. Vivado 的这个用途标记由所有仿真共享, 因此多个仿真可见的设计模块取其依赖并集. 同时设置各仿真的顶层和 `xsim.elaborate.timescale`.
+
+列表中第一个仿真设为当前仿真, 随后移除默认 `sim_1`; 省略 `simulations` 或使用 `[]` 时仅导出设计, 并清空默认仿真的 `SOURCE_SET`. 同一个 project 可以被多个 xpr 引用.
+
+导出不启动综合、实现或仿真. 重复导出会重新生成同名 Vivado 工程. Windows 中可使用 `buildsys.bat xpr [xpr-id]`.
 
 Windows 下请先运行 Vivado 的 `settings64.bat`, 或将安装目录的 `bin` 加入当前终端的 `PATH`, 然后执行 `buildsys.bat xpr`. 构建系统通过 `cmd.exe` 启动 `vivado.bat`; Vivado 子进程会优先使用运行 buildsys 的 Python 所在目录, 并跳过 Microsoft Store 的应用别名目录, 避免 Tcl 桥接选中无法执行的 `python3` 别名.
 
-导出仅要求 `directories.sources`、`directories.constraints`、`directories.xpr`、program 的 `fpga` / `top-symbol` / `constraints` 和对应 FPGA 的 `part`; 不要求 yosys 的产物路径或 FPGA 本地数据库、PYTHONPATH 配置. 省略目标时, 所有 program 均校验通过后才开始调用 Vivado. `auxiliary` 和 `script` 不会自动导出 Vivado 工程.
+导出要求 `directories.sources`、`directories.constraints`、`directories.xpr`、引用 project 的 `fpga` / `top-symbol` / `constraints`、对应 FPGA 的 `part`, 以及引用 simulation 的 `top-symbol` / `timescale`; 不要求 yosys、Icarus 的产物路径或 FPGA 本地数据库、PYTHONPATH 配置. 省略目标时, 所有 xpr 及其引用均校验通过后才开始调用 Vivado. 指定目标时仅校验其引用的设计和仿真, 不要求其他目标的字段完整. `auxiliary` 和 `script` 不会自动导出 Vivado 工程.
 
 ## Features
 

@@ -30,7 +30,7 @@ class ProgrammingTests(unittest.TestCase):
             'synthesis = "build/synth"\nimplementation = "build/impl"\n'
             'bitstream = "build/bits"\n'
             '[[fpga]]\nid = "ego1"\npart = "xc7a35tcsg324-1"\n'
-            '[[program]]\nid = "coreprog"\nfpga = "ego1"\ntop-symbol = "top"\n'
+            '[[project]]\nid = "coreprog"\nfpga = "ego1"\ntop-symbol = "top"\n'
             'synthesis = "core.json"\nimplementation = "core.fasm"\n'
             'bitstream = "core image.bit"\nconstraints = "board.xdc"\n'
         )
@@ -132,7 +132,7 @@ sys.exit(3)
             'name = "Programming only"\nid = "example"\n'
             '[directories]\nbitstream = "build/bits"\n'
             '[[fpga]]\nid = "ego1"\n'
-            '[[program]]\nid = "coreprog"\nfpga = "ego1"\nbitstream = "core image.bit"\n'
+            '[[project]]\nid = "coreprog"\nfpga = "ego1"\nbitstream = "core image.bit"\n'
             '[[simulation]]\nid = "unfinished"\n'
         )
         local = self.root / "build/fpga/ego1.toml"

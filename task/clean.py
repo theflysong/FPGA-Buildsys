@@ -29,6 +29,8 @@ def cleanup_script(project: Project, target_id: str | None, *, dist: bool,
         if target_id is None:
             lines.extend([
                 f"  rm -rf -- {shlex.quote(relative(project, project.auxiliary_dir))}",
+                f"  rm -rf -- {shlex.quote(relative(project, project.model_dir))}",
+                f"  rm -rf -- {shlex.quote(relative(project, project.symbol_dir))}",
                 f"  rm -f -- {shlex.quote(relative(project, project.script))}",
                 "  rm -rf -- build/jobs",
             ])

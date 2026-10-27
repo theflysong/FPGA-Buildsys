@@ -1,4 +1,4 @@
-"""Read and validate project configuration and source metadata."""
+"""Read project configuration and initialize validated FPGA settings."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ import sys
 
 from models import (
     CleanupTarget, Fpga, ImplementationProgram, Program, ProgrammingTarget,
-    Project, Simulation, SynthesisProgram, XprProgram,
+    Project, Simulation, SynthesisProgram, XprProject, XprSimulation,
 )
 from util import (
-    ConfigError, ID_RE, SYMBOL_RE, TIMESCALE_RE, external_path, fpga_config_path, metadata_symbols,
+    ConfigError, ID_RE, SYMBOL_RE, TIMESCALE_RE, external_path, fpga_config_path,
     output_directory, output_name, project_path, read_toml, required_string,
-    source_closure, source_order, string_list, task_identifier,
+    string_list, task_identifier,
 )
 
 
@@ -73,11 +73,13 @@ def load_fpga_config(root: Path, fpga: Fpga) -> Fpga:
 
 
 def task_index(data: dict, config_path: Path) -> dict[str, tuple[str, dict, str]]:
+    if "program" in data:
+        raise ConfigError(f"{config_path}: [[program]] is obsolete; rename it to [[project]]")
     entries: dict[str, tuple[str, dict, str]] = {}
-    for kind in ("simulation", "program"):
+    for kind in ("simulation", "project"):
         raw_entries = data.get(kind, [])
         if not isinstance(raw_entries, list):
-            raise ConfigError(f"{config_path}: [[simulation]] and [[program]] must be arrays of tables")
+            raise ConfigError(f"{config_path}: [[simulation]] and [[project]] must be arrays of tables")
         for index, raw in enumerate(raw_entries, 1):
             location = f"{config_path}: {kind}[{index}]"
             if not isinstance(raw, dict):
@@ -89,44 +91,19 @@ def task_index(data: dict, config_path: Path) -> dict[str, tuple[str, dict, str]
                 )
             entries[task_id] = (kind, raw, location)
     if not entries:
-        raise ConfigError(f"{config_path}: at least one [[simulation]] or [[program]] is required")
+        raise ConfigError(f"{config_path}: at least one [[simulation]] or [[project]] is required")
     return entries
 
 
-def source_index(root: Path, directories: dict,
-                 config_path: Path) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
-    source_dirs = string_list(directories, "sources", str(config_path))
-    if not source_dirs:
+def source_directories(root: Path, directories: dict, config_path: Path,
+                       key: str = "sources") -> tuple[Path, ...]:
+    if key == "simulation" and key not in directories:
+        return ()
+    source_dirs = string_list(directories, key, str(config_path))
+    if key == "sources" and not source_dirs:
         raise ConfigError(f"{config_path}: directories.sources must not be empty")
-    sources: set[Path] = set()
-    for value in source_dirs:
-        directory = project_path(root, value, f"{config_path}: directories.sources")
-        if not directory.is_dir():
-            raise ConfigError(f"{config_path}: source directory does not exist: {directory}")
-        sources.update(path for path in directory.rglob("*") if path.is_file() and path.suffix in {".v", ".sv"})
-    if not sources:
-        raise ConfigError(f"{config_path}: no Verilog source files in directories.sources")
-
-    exports: dict[str, str] = {}
-    imports: dict[str, tuple[str, ...]] = {}
-    for source in sorted(sources):
-        metadata_path = source.with_suffix(".toml")
-        metadata = read_toml(metadata_path)
-        module = metadata.get("module")
-        if not isinstance(module, dict):
-            raise ConfigError(f"{metadata_path}: [module] metadata is required")
-        relative = source.relative_to(root).as_posix()
-        imported = metadata_symbols(module, "import", metadata_path)
-        exported = metadata_symbols(module, "export", metadata_path)
-        imports[relative] = imported
-        for symbol in exported:
-            if symbol in exports:
-                raise ConfigError(
-                    f"{metadata_path}: duplicate export {symbol!r}; already exported by {exports[symbol]}"
-                )
-            exports[symbol] = relative
-
-    return exports, imports
+    result = [project_path(root, value, f"{config_path}: directories.{key}") for value in source_dirs]
+    return tuple(dict.fromkeys(result))
 
 
 def fpga_index(data: dict, config_path: Path) -> dict[str, tuple[dict, str]]:
@@ -145,6 +122,85 @@ def fpga_index(data: dict, config_path: Path) -> dict[str, tuple[dict, str]]:
     return result
 
 
+def parse_fpga(root: Path, fpga_id: str, raw: dict, location: str) -> Fpga:
+    part = required_string(raw, "part", location)
+    legacy = [key for key in ("xray-database", "toolchain-root", "PYTHONPATH") if key in raw]
+    if legacy:
+        path = fpga_config_path(root, fpga_id)
+        raise ConfigError(f"{location}: move {', '.join(legacy)} to {path} and remove these fields from configuration.toml")
+    return Fpga(fpga_id, part, None, (), ())
+
+
+def constraint_path(root: Path, directories: dict, config_path: Path,
+                    raw: dict, location: str) -> Path:
+    constraint_dirs = string_list(directories, "constraints", str(config_path))
+    if len(constraint_dirs) != 1:
+        raise ConfigError(f"{config_path}: directories.constraints must contain one path")
+    directory = project_path(root, constraint_dirs[0], f"{config_path}: directories.constraints")
+    path = directory / output_name(required_string(raw, "constraints", location), location)
+    if not path.is_file():
+        raise ConfigError(f"{location}: constraints file does not exist: {path}")
+    return path
+
+
+def configure_xpr(root: Path, data: dict, config_path: Path, identifier: str,
+                  entries: dict[str, tuple[str, dict, str]], target_id: str | None) -> Project:
+    raw_xprs = data.get("xpr", [])
+    if not isinstance(raw_xprs, list):
+        raise ConfigError(f"{config_path}: [[xpr]] must be an array of tables")
+    xpr_entries: dict[str, tuple[dict, str]] = {}
+    for index, raw in enumerate(raw_xprs, 1):
+        location = f"{config_path}: xpr[{index}]"
+        if not isinstance(raw, dict):
+            raise ConfigError(f"{location}: expected a table")
+        xpr_id = task_identifier(raw, location)
+        if xpr_id in xpr_entries:
+            raise ConfigError(f"{location}: duplicate xpr id {xpr_id!r}")
+        xpr_entries[xpr_id] = (raw, location)
+    if target_id is not None:
+        if target_id not in xpr_entries:
+            raise ConfigError(f"{config_path}: unknown xpr {target_id!r}")
+        xpr_entries = {target_id: xpr_entries[target_id]}
+    if not xpr_entries:
+        raise ConfigError(f"{config_path}: at least one [[xpr]] is required for xpr")
+    directories = data.get("directories")
+    if not isinstance(directories, dict):
+        raise ConfigError(f"{config_path}: [directories] is required")
+    directory = output_directory(root, directories, "xpr", str(config_path))
+    raw_fpgas = fpga_index(data, config_path)
+    targets: list[XprProject] = []
+    for xpr_id, (raw, location) in xpr_entries.items():
+        project_id = required_string(raw, "project", location, ID_RE)
+        if project_id not in entries or entries[project_id][0] != "project":
+            raise ConfigError(f"{location}: unknown project {project_id!r}")
+        _, design, design_location = entries[project_id]
+        fpga_id = required_string(design, "fpga", design_location, ID_RE)
+        if fpga_id not in raw_fpgas:
+            raise ConfigError(f"{design_location}: unknown fpga id {fpga_id!r}")
+        fpga_raw, fpga_location = raw_fpgas[fpga_id]
+        fpga = parse_fpga(root, fpga_id, fpga_raw, fpga_location)
+        top = required_string(design, "top-symbol", design_location, SYMBOL_RE)
+        constraints = constraint_path(root, directories, config_path, design, design_location)
+        simulation_ids = string_list(raw, "simulations", location) if "simulations" in raw else []
+        if len(simulation_ids) != len(set(simulation_ids)):
+            raise ConfigError(f"{location}: duplicate simulation reference")
+        simulations: list[XprSimulation] = []
+        for simulation_id in simulation_ids:
+            if simulation_id not in entries or entries[simulation_id][0] != "simulation":
+                raise ConfigError(f"{location}: unknown simulation {simulation_id!r}")
+            _, simulation, simulation_location = entries[simulation_id]
+            simulations.append(XprSimulation(
+                simulation_id,
+                required_string(simulation, "top-symbol", simulation_location, SYMBOL_RE),
+                required_string(simulation, "timescale", simulation_location, TIMESCALE_RE),
+            ))
+        xpr = project_path(root, str(directory / xpr_id / f"{xpr_id}.xpr"), location)
+        targets.append(XprProject(xpr_id, project_id, fpga, top, constraints, tuple(simulations), xpr))
+    return Project(root, identifier, (), (), command="xpr", xprs=tuple(targets),
+                   source_directories=source_directories(root, directories, config_path),
+                   simulation_directories=source_directories(root, directories, config_path, "simulation"))
+
+
 def configure(root: Path, command: str = "script", target_id: str | None = None) -> Project:
     root = root.resolve()
     config_path = root / "configuration.toml"
@@ -152,19 +208,24 @@ def configure(root: Path, command: str = "script", target_id: str | None = None)
     identifier = required_string(data, "id", str(config_path), ID_RE)
     required_string(data, "name", str(config_path))
     entries = task_index(data, config_path)
+    if command == "model":
+        directories = data.get("directories")
+        if not isinstance(directories, dict):
+            raise ConfigError(f"{config_path}: [directories] is required")
+        return Project(root, identifier, (), (), command=command,
+                       source_directories=source_directories(root, directories, config_path),
+                       simulation_directories=source_directories(root, directories, config_path, "simulation"))
+    if command == "xpr":
+        return configure_xpr(root, data, config_path, identifier, entries, target_id)
     full = command in {"auxiliary", "script"}
     cleaning = command in {"clean", "cleandist"}
-    all_targets = full or (command in {"clean", "cleandist", "xpr"} and target_id is None)
+    all_targets = full or (cleaning and target_id is None)
     if not all_targets:
         expected = ("target id" if cleaning else
-                    "simulation" if command in {"build", "simulate"} else "program")
+                    "simulation" if command in {"build", "simulate"} else "project")
         if target_id not in entries or (not cleaning and entries[target_id][0] != expected):
             raise ConfigError(f"{config_path}: unknown {expected} {target_id!r}")
     selected = entries if all_targets else {target_id: entries[target_id]}
-    if command == "xpr":
-        selected = {key: entry for key, entry in selected.items() if entry[0] == "program"}
-        if not selected:
-            raise ConfigError(f"{config_path}: at least one [[program]] is required for xpr")
     directories = data.get("directories")
     if not isinstance(directories, dict):
         raise ConfigError(f"{config_path}: [directories] is required")
@@ -182,17 +243,7 @@ def configure(root: Path, command: str = "script", target_id: str | None = None)
             raise ConfigError(f"{location}: duplicate output {path}")
         seen_outputs.add(path)
 
-    def constraint_path(raw: dict, location: str) -> Path:
-        constraint_dirs = string_list(directories, "constraints", str(config_path))
-        if len(constraint_dirs) != 1:
-            raise ConfigError(f"{config_path}: directories.constraints must contain one path")
-        directory = project_path(root, constraint_dirs[0], f"{config_path}: directories.constraints")
-        path = directory / output_name(required_string(raw, "constraints", location), location)
-        if not path.is_file():
-            raise ConfigError(f"{location}: constraints file does not exist: {path}")
-        return path
-
-    needs_fpga = full or (not cleaning and any(kind == "program" for kind, _, _ in selected.values()))
+    needs_fpga = full or (not cleaning and any(kind == "project" for kind, _, _ in selected.values()))
     raw_fpgas = fpga_index(data, config_path) if needs_fpga else {}
     fpgas: dict[str, Fpga] = {}
 
@@ -201,12 +252,7 @@ def configure(root: Path, command: str = "script", target_id: str | None = None)
             raise ConfigError(f"{location}: unknown fpga id {fpga_id!r}")
         if fpga_id not in fpgas:
             raw, fpga_location = raw_fpgas[fpga_id]
-            part = required_string(raw, "part", fpga_location)
-            legacy = [key for key in ("xray-database", "toolchain-root", "PYTHONPATH") if key in raw]
-            if legacy:
-                path = fpga_config_path(root, fpga_id)
-                raise ConfigError(f"{fpga_location}: move {', '.join(legacy)} to {path} and remove these fields from configuration.toml")
-            fpgas[fpga_id] = Fpga(fpga_id, part, None, (), ())
+            fpgas[fpga_id] = parse_fpga(root, fpga_id, raw, fpga_location)
         return fpgas[fpga_id]
 
     if full:
@@ -214,13 +260,13 @@ def configure(root: Path, command: str = "script", target_id: str | None = None)
             public_fpga(fpga_id, str(config_path))
 
     simulations: list[Simulation] = []
-    programs: list[SynthesisProgram | ProgrammingTarget | XprProgram] = []
+    programs: list[SynthesisProgram | ProgrammingTarget] = []
     cleanup_targets: list[CleanupTarget] = []
     for task_id, (kind, raw, location) in selected.items():
         if cleaning:
             kinds = ("vvp", "vcd") if kind == "simulation" else ("synthesis", "implementation", "bitstream")
             outputs = tuple(output(raw, name, location) for name in kinds)
-            if kind == "program":
+            if kind == "project":
                 frames = outputs[-1].with_suffix(".frames")
                 register_output(frames, location)
                 outputs = (*outputs, frames)
@@ -248,17 +294,12 @@ def configure(root: Path, command: str = "script", target_id: str | None = None)
 
         fpga = public_fpga(fpga_id, location)
         top = required_string(raw, "top-symbol", location, SYMBOL_RE)
-        if command == "xpr":
-            directory = output_directory(root, directories, "xpr", str(config_path))
-            xpr = project_path(root, str(directory / task_id / f"{task_id}.xpr"), location)
-            programs.append(XprProgram(task_id, fpga, top, constraint_path(raw, location), xpr))
-            continue
         synthesis = output(raw, "synthesis", location)
         if command == "synthesis":
             programs.append(SynthesisProgram(task_id, fpga, top, synthesis))
             continue
         implementation = output(raw, "implementation", location)
-        constraints = constraint_path(raw, location)
+        constraints = constraint_path(root, directories, config_path, raw, location)
         if constraints in seen_outputs:
             raise ConfigError(f"{location}: duplicate output {constraints}")
         if command == "implementation":
@@ -274,35 +315,28 @@ def configure(root: Path, command: str = "script", target_id: str | None = None)
                                              root / "build/auxiliary" / f"{task_id}.ys"))
 
     needs_sources = not cleaning and command != "program"
-    exports, imports = source_index(root, directories, config_path) if needs_sources else ({}, {})
-    project = Project(
-        root, identifier, tuple(simulations), tuple(programs), exports, imports,
+    return Project(
+        root, identifier, tuple(simulations), tuple(programs),
         command=command,
         simulation_ids=tuple(key for key, entry in entries.items() if entry[0] == "simulation"),
-        program_ids=tuple(key for key, entry in entries.items() if entry[0] == "program"),
+        program_ids=tuple(key for key, entry in entries.items() if entry[0] == "project"),
         cleanup_targets=tuple(cleanup_targets),
+        source_directories=source_directories(root, directories, config_path) if needs_sources else (),
+        simulation_directories=source_directories(root, directories, config_path, "simulation") if needs_sources else (),
+        fpgas=tuple(fpgas.values()),
     )
-    if needs_sources:
-        for target in (*simulations, *programs):
-            assert isinstance(target, (Simulation, SynthesisProgram, XprProgram))
-            if target.top not in exports:
-                kind = "simulation" if isinstance(target, Simulation) else "program"
-                raise ConfigError(f"{config_path}: {kind} {target.identifier!r} has no exported top-symbol {target.top!r}")
-            source_closure(project, target.top)
-        if full:
-            for source in imports:
-                source_order(project, source)
 
-    # Initialize user-owned settings only after all required public checks pass.
-    if command == "xpr":
-        return project
-    for fpga_id, fpga in fpgas.items():
-        if initialize_fpga_config(root, fpga):
-            path = fpga_config_path(root, fpga_id)
+
+def configure_fpgas(project: Project) -> Project:
+    """Initialize user-owned settings after public configuration and model checks."""
+    fpgas: dict[str, Fpga] = {}
+    for fpga in project.fpgas:
+        if initialize_fpga_config(project.root, fpga):
+            path = fpga_config_path(project.root, fpga.identifier)
             print(f"Created {path}; fill xray-database and PYTHONPATH before FPGA builds. "
                   "toolchain-root is optional; use [] to use PATH.", file=sys.stderr)
-        fpgas[fpga_id] = load_fpga_config(root, fpga)
+        fpgas[fpga.identifier] = load_fpga_config(project.root, fpga)
     return replace(project, programs=tuple(
         replace(target, fpga=fpgas[target.fpga.identifier]) if isinstance(target, SynthesisProgram) else target
-        for target in programs
+        for target in project.programs
     ))

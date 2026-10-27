@@ -3,7 +3,8 @@ id = "example_ego1"
 
 [directories]
 constraints = ["src/constraints/"]
-sources = ["sim/", "src/modules/"]
+sources = ["src/modules/"]
+simulation = ["sim/"]
 vvp = "build/vvp/"
 vcd = "build/vcd/"
 xpr = "build/xpr/"
@@ -36,7 +37,7 @@ vcd = "tb_driver7seg.vcd"
 id = "ego1"
 part = "xc7a35tcsg324-1"
 
-[[program]]
+[[project]]
 id = "driver7seg"
 fpga = "ego1"
 top-symbol = "Driver7Seg"
@@ -44,3 +45,8 @@ synthesis = "driver7seg.json"
 implementation = "driver7seg.fasm"
 bitstream = "driver7seg.bit"
 constraints = "xilinx.xdc"
+
+[[xpr]]
+id = "driver7seg"
+project = "driver7seg"
+simulations = ["bin2bcd", "bcd2seg7", "tb_driver7seg"]

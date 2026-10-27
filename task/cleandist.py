@@ -1,4 +1,4 @@
-"""Generate and execute product, auxiliary file, and task script cleanup."""
+"""Clean products and generated files, including models for project-wide cleanup."""
 
 from __future__ import annotations
 

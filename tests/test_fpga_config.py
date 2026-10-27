@@ -41,7 +41,7 @@ class FpgaConfigurationTests(unittest.TestCase):
             '[[simulation]]\nid = "demo"\ntop-symbol = "tb"\ntimescale = "1ns/1ps"\n'
             'vvp = "demo.vvp"\nvcd = "demo.vcd"\n'
             '[[fpga]]\nid = "ego1"\npart = "xc7a35tcsg324-1"\n'
-            '[[program]]\nid = "main"\nfpga = "ego1"\ntop-symbol = "core"\n'
+            '[[project]]\nid = "main"\nfpga = "ego1"\ntop-symbol = "core"\n'
             'synthesis = "main.json"\nimplementation = "main.fasm"\n'
             'bitstream = "main.bit"\nconstraints = "board.xdc"\n'
         )
@@ -93,7 +93,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         for command in ("synthesis", "implementation", "bitstream"):
             result = self.cli(command, "main", env=env)
             self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(result.stdout.splitlines(), ["configure"])
+            self.assertEqual(result.stdout.splitlines(), ["configure", "model"])
             self.assertIn(str(self.local), result.stderr)
             direct = subprocess.run([str(self.root / "jobs.sh"), command, "main"],
                                     capture_output=True, text=True, env=env)
@@ -118,7 +118,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         with self.config.open("a") as stream:
             stream.write(
                 '[[fpga]]\nid = "other"\npart = "xc7a35tcsg324-1"\n'
-                '[[program]]\nid = "other_main"\nfpga = "other"\ntop-symbol = "core"\n'
+                '[[project]]\nid = "other_main"\nfpga = "other"\ntop-symbol = "core"\n'
                 'synthesis = "other.json"\nimplementation = "other.fasm"\n'
                 'bitstream = "other.bit"\nconstraints = "board.xdc"\n'
             )
@@ -181,7 +181,7 @@ class FpgaConfigurationTests(unittest.TestCase):
             original = original.replace(line, '')
         original += (
             '[[fpga]]\nid = "other"\n'
-            '[[program]]\nid = "unfinished"\nfpga = "other"\n'
+            '[[project]]\nid = "unfinished"\nfpga = "other"\n'
         )
         other = self.local.with_name("other.toml")
         other.write_text("invalid TOML [")
@@ -345,7 +345,7 @@ class FpgaConfigurationTests(unittest.TestCase):
             for command in ("synthesis", "implementation", "bitstream"):
                 result = self.cli(command, "main", env=env)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(result.stdout.splitlines(), ["configure"])
+                self.assertEqual(result.stdout.splitlines(), ["configure", "model"])
                 self.assertIn("fill PYTHONPATH", result.stderr)
                 direct = subprocess.run([str(self.root / "jobs.sh"), command, "main"],
                                         capture_output=True, text=True, env=env)

@@ -35,7 +35,7 @@ target_ids() {
             [[ $identifier =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]] || continue
             emit "$identifier"
         done
-        if [[ $extension == .f ]]; then kind=simulation; else kind=program; fi
+        if [[ $extension == .f ]]; then kind=simulation; else kind=project; fi
         while IFS= read -r identifier; do
             emit "$identifier"
         done < <(python3 "$script_dir/completion_ids.py" "$project_dir/configuration.toml" "$kind" 2>/dev/null)
@@ -50,7 +50,7 @@ directories() {
 }
 
 if (( position == 0 )); then
-    for command in auxiliary script build simulate synthesis implementation bitstream program xpr clean cleandist init init-venv install completion; do
+    for command in model auxiliary script build simulate synthesis implementation bitstream program xpr clean cleandist init init-venv install completion; do
         emit "$command"
     done
     exit 0
@@ -60,8 +60,15 @@ case ${words[0]} in
     build|simulate)
         if (( position == 1 )); then target_ids .f; fi
         ;;
-    synthesis|implementation|bitstream|xpr)
+    synthesis|implementation|bitstream)
         if (( position == 1 )); then target_ids .ys; fi
+        ;;
+    xpr)
+        if (( position == 1 )); then
+            while IFS= read -r identifier; do
+                emit "$identifier"
+            done < <(python3 "$script_dir/completion_ids.py" "$project_dir/configuration.toml" xpr 2>/dev/null)
+        fi
         ;;
     clean|cleandist)
         if (( position == 1 )); then target_ids .f .ys; fi

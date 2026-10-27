@@ -32,7 +32,7 @@ def candidate_ids(path: Path, kind: str) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) == 2 and argv[1] in {"simulation", "program"}:
+    if len(argv) == 2 and argv[1] in {"simulation", "project", "xpr"}:
         for identifier in candidate_ids(Path(argv[0]), argv[1]):
             print(identifier)
     return 0

@@ -107,28 +107,7 @@ def source_closure(project: Project, top: str) -> list[str]:
 
 
 def source_order(project: Project, source: str) -> list[str]:
-    ordered: list[str] = []
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(source: str) -> None:
-        if source in visited:
-            return
-        if source in visiting:
-            raise ConfigError(f"{project.root / Path(source).with_suffix('.toml')}: cyclic source dependency")
-        visiting.add(source)
-        for symbol in sorted(project.imports[source]):
-            if symbol not in project.exports:
-                raise ConfigError(f"{project.root / Path(source).with_suffix('.toml')}: unresolved import {symbol!r}")
-            dependency = project.exports[symbol]
-            if dependency != source:
-                visit(dependency)
-        visiting.remove(source)
-        visited.add(source)
-        ordered.append(source)
-
-    visit(source)
-    return ordered
+    return [*project.sources[source].closure, source]
 
 
 def relative(project: Project, path: Path) -> str:
@@ -217,7 +196,7 @@ def require_simulation(project: Project, target_id: str | None) -> None:
 
 def require_program(project: Project, target_id: str | None) -> None:
     if target_id not in {item.identifier for item in project.programs}:
-        raise ConfigError(f"{project.root / 'configuration.toml'}: unknown program {target_id!r}")
+        raise ConfigError(f"{project.root / 'configuration.toml'}: unknown project {target_id!r}")
 
 
 def require_fpga_build(project: Project, target_id: str | None) -> None:
@@ -226,11 +205,11 @@ def require_fpga_build(project: Project, target_id: str | None) -> None:
     assert isinstance(target, SynthesisProgram)
     if target.fpga.xray_database is None:
         path = fpga_config_path(project.root, target.fpga.identifier)
-        raise ConfigError(f"{path}: fill xray-database before building program {target_id!r}; toolchain-root is optional")
+        raise ConfigError(f"{path}: fill xray-database before building project {target_id!r}; toolchain-root is optional")
 
     if not target.fpga.python_paths:
         path = fpga_config_path(project.root, target.fpga.identifier)
-        raise ConfigError(f"{path}: fill PYTHONPATH with Python module directories before building program {target_id!r}")
+        raise ConfigError(f"{path}: fill PYTHONPATH with Python module directories before building project {target_id!r}")
 
 
 def add_target_argument(parser: argparse.ArgumentParser) -> None:

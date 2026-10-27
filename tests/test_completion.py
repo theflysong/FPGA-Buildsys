@@ -68,7 +68,7 @@ class CompletionTests(unittest.TestCase):
     def test_commands_and_missing_auxiliary(self) -> None:
         shutil.rmtree(self.auxiliary)
         self.assertEqual(set(self.query()), {
-            "auxiliary", "script", "build", "simulate", "synthesis", "implementation",
+            "model", "auxiliary", "script", "build", "simulate", "synthesis", "implementation",
             "bitstream", "program", "xpr", "clean", "cleandist", "init", "init-venv", "install", "completion",
         })
         self.assertEqual(self.query("sim"), ["simulate"])
@@ -86,8 +86,9 @@ class CompletionTests(unittest.TestCase):
     def test_context_ids_and_live_file_changes(self) -> None:
         for command in ("build", "simulate"):
             self.assertEqual(self.query(command, ""), ["demo", "tb_other"])
-        for command in ("synthesis", "implementation", "bitstream", "program", "xpr"):
+        for command in ("synthesis", "implementation", "bitstream", "program"):
             self.assertEqual(self.query(command, ""), ["coreprog"])
+        self.assertEqual(self.query("xpr", ""), [])
         for command in ("clean", "cleandist"):
             self.assertEqual(set(self.query(command, "")), {"demo", "tb_other", "coreprog"})
         self.assertEqual(self.query("simulate", "tb"), ["tb_other"])
@@ -107,12 +108,13 @@ class CompletionTests(unittest.TestCase):
         (self.root / "configuration.toml").write_text(
             '[[simulation]]\nid = "tb_first"\n[[simulation]]\nid = "tb_second"\n'
             '[[simulation]]\nid = "tb_first"\n[[simulation]]\nid = "invalid id"\n'
-            '[[program]]\nid = "first_program"\n'
+            '[[project]]\nid = "first_program"\n'
+            '[[xpr]]\nid = "first_export"\n'
         )
         self.assertEqual(self.query("simulate", "tb_f"), ["tb_first"])
         self.assertEqual(self.query("build", ""), ["tb_first", "tb_second"])
         self.assertEqual(self.query("synthesis", "first", wrapper="buildsys.sh"), ["first_program"])
-        self.assertEqual(self.query("xpr", "first"), ["first_program"])
+        self.assertEqual(self.query("xpr", "first"), ["first_export"])
         self.assertEqual(set(self.query("cleandist", "")), {"tb_first", "tb_second", "first_program"})
         self.assertFalse((self.root / "build").exists())
         # Invalid private configuration has no bearing on completion.
@@ -125,11 +127,13 @@ class CompletionTests(unittest.TestCase):
 
     def test_auxiliary_and_configuration_ids_are_merged_for_each_target_type(self) -> None:
         (self.root / "configuration.toml").write_text(
-            '[[simulation]]\nid = "configured_sim"\n[[program]]\nid = "configured_program"\n'
+            '[[simulation]]\nid = "configured_sim"\n[[project]]\nid = "configured_program"\n'
+            '[[xpr]]\nid = "configured_export"\n'
         )
         self.assertEqual(self.query("simulate", ""), ["demo", "tb_other", "configured_sim"])
         self.assertEqual(self.query("simulate", "configured"), ["configured_sim"])
         self.assertEqual(self.query("program", ""), ["coreprog", "configured_program"])
+        self.assertEqual(self.query("xpr", ""), ["configured_export"])
         (self.auxiliary / "coreprog.ys").unlink()
         (self.auxiliary / "invalid id.ys").touch()
         self.assertEqual(self.query("program", ""), ["configured_program"])
@@ -221,7 +225,7 @@ if (( ${#COMPREPLY[@]} )); then printf '%s\\n' "${COMPREPLY[@]}"; fi
         shutil.rmtree(self.auxiliary)
         (self.root / "configuration.toml").write_text(
             '[[simulation]]\nid = "demo"\n[[simulation]]\nid = "tb_other"\n'
-            '[[program]]\nid = "coreprog"\n'
+            '[[project]]\nid = "coreprog"\n'
         )
         data = self.base / "data"
         completions = data / "bash-completion/completions"

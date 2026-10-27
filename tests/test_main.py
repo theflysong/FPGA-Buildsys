@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,10 @@ import unittest
 
 
 ENTRY = Path(__file__).resolve().parents[1] / "main.py"
+
+
+def model_file(root: Path, directory: str, source: str) -> Path:
+    return root / "build" / directory / (hashlib.sha256(source.encode("utf-8")).hexdigest() + ".json")
 
 
 class BuildSystemTests(unittest.TestCase):
@@ -81,7 +86,7 @@ class BuildSystemTests(unittest.TestCase):
             )
         config += (
             '[[fpga]]\nid = "ego1"\npart = "xc7a35tcsg324-1"\n'
-            f'[[program]]\nid = "{name}"\nfpga = "ego1"\n'
+            f'[[project]]\nid = "{name}"\nfpga = "ego1"\n'
             'top-symbol = "core"\nsynthesis = "core.json"\n'
             'implementation = "core.fasm"\nbitstream = "core.bit"\n'
             'constraints = "board.xdc"\n'
@@ -161,8 +166,8 @@ class BuildSystemTests(unittest.TestCase):
             self.assertTrue(job.is_file())
             self.assertEqual(subprocess.run(["bash", "-n", str(job)]).returncode, 0)
         self.assertFalse((self.root / "build/jobs/coreprog/build.sh").exists())
-        self.assertIn("Unknown program", self.dispatch("bitstream", "missing").stderr)
-        self.assertIn("unknown program", self.cli("bitstream", "missing").stderr)
+        self.assertIn("Unknown project", self.dispatch("bitstream", "missing").stderr)
+        self.assertIn("unknown project", self.cli("bitstream", "missing").stderr)
         (tool_dir / "yosys").write_text(
             '#!/usr/bin/env bash\nprintf "%s\\n" yosys >> "$CALL_LOG"\n'
             'printf "invalid json\\n"\n'
@@ -220,15 +225,17 @@ class BuildSystemTests(unittest.TestCase):
         script = self.cli("script")
         self.assertEqual(script.returncode, 0, script.stderr)
         self.assertEqual(script.stdout.splitlines(),
-                         ["configure", "auxiliary generation", "script generation"])
+                         ["configure", "model", "auxiliary generation", "script generation"])
         self.assertTrue((self.root / "jobs.sh").is_file())
         self.assertFalse((self.root / "example.sh").exists())
         for task in ("build", "clean", "simulate"):
             self.assertTrue((self.root / f"build/jobs/demo/{task}.sh").is_file())
-        self.assertEqual(json.loads((self.root / "build/auxiliary/example.map").read_text()),
-                         {"core": "src/core.v", "tb": "src/tb.v"})
-        self.assertEqual(json.loads((self.root / "build/auxiliary/example.dep").read_text()),
-                         {"src/core.v": [], "src/tb.v": ["core"]})
+        self.assertEqual(json.loads(model_file(self.root, "symbol", "src/tb.v").read_text()),
+                         {"path": "src/tb.v", "import": ["core"], "export": ["tb"]})
+        self.assertEqual(json.loads(model_file(self.root, "model", "src/tb.v").read_text()),
+                         {"path": "src/tb.v", "dependencies": ["src/core.v"], "closure": ["src/core.v"]})
+        self.assertFalse((self.root / "build/auxiliary/example.map").exists())
+        self.assertFalse((self.root / "build/auxiliary/example.dep").exists())
         filelist = (self.root / "build/auxiliary/demo.f").read_text()
         self.assertIn("+timescale+1ns/1ps", filelist)
         self.assertLess(filelist.index("src/core.v"), filelist.index("src/tb.v"))
@@ -271,8 +278,9 @@ class BuildSystemTests(unittest.TestCase):
         self.assertTrue(all(not output.exists() for output in outputs[2:]))
         self.assertFalse((self.root / "build/auxiliary/prog_demo.ys").exists())
         self.assertFalse((self.root / "build/jobs/prog_demo").exists())
-        for shared in ("example.map", "example.dep", "demo.f"):
-            self.assertTrue((self.root / "build/auxiliary" / shared).exists())
+        self.assertTrue((self.root / "build/auxiliary/demo.f").exists())
+        for directory in ("model", "symbol"):
+            self.assertTrue(model_file(self.root, directory, "src/core.v").exists())
         self.assertTrue((self.root / "build/jobs/demo/build.sh").exists())
         self.assertTrue((self.root / "jobs.sh").exists())
         missing_job = self.dispatch("synthesis", "prog_demo")
@@ -288,14 +296,14 @@ class BuildSystemTests(unittest.TestCase):
         self.assertEqual(cleaned.returncode, 0, cleaned.stderr)
         self.assertEqual(cleaned.stdout.splitlines(), ["configure", "script generation", "script execution"])
         self.assertTrue(all(not output.exists() for output in outputs))
-        self.assertTrue((self.root / "build/auxiliary/example.map").exists())
+        self.assertTrue(model_file(self.root, "model", "src/core.v").exists())
         self.assertTrue((self.root / "build/jobs/demo/build.sh").exists())
         self.assertTrue((self.root / "jobs.sh").exists())
 
         dist = self.cli("cleandist")
         self.assertEqual(dist.returncode, 0, dist.stderr)
         self.assertEqual(dist.stdout.splitlines(), ["configure", "script generation", "script execution"])
-        for generated in ("build/auxiliary", "build/jobs", "jobs.sh"):
+        for generated in ("build/auxiliary", "build/model", "build/symbol", "build/jobs", "jobs.sh"):
             self.assertFalse((self.root / generated).exists())
         for wrapper in ("buildsys", "buildsys.sh", "buildsys.bat"):
             self.assertTrue((self.root / wrapper).exists())
@@ -473,13 +481,13 @@ class BuildSystemTests(unittest.TestCase):
                 self.assertFalse((self.root / "build").exists())
 
     @unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "Icarus Verilog unavailable")
-    def test_selected_generation_preserves_shared_maps_and_other_tasks(self) -> None:
+    def test_selected_generation_preserves_other_models_and_tasks(self) -> None:
         self.add_second_simulation()
         self.assertEqual(self.cli("script").returncode, 0)
         files = [*self.root.glob("build/jobs/second/*.sh"),
                  *self.root.glob("build/jobs/_project/*.sh"),
-                 self.root / "build/auxiliary/second.f", self.root / "build/auxiliary/example.map",
-                 self.root / "build/auxiliary/example.dep"]
+                 self.root / "build/auxiliary/second.f", model_file(self.root, "model", "src/second.v"),
+                 model_file(self.root, "symbol", "src/second.v")]
         before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in files}
         config = self.root / "configuration.toml"
         config.write_text(config.read_text().replace('top-symbol = "tb_second"', 'top-symbol = "absent"'))
@@ -526,8 +534,8 @@ class BuildSystemTests(unittest.TestCase):
         self.add_second_simulation()
         build = self.cli("build", "demo")
         self.assertEqual(build.returncode, 0, build.stderr)
-        self.assertEqual(build.stdout.splitlines()[:4],
-                         ["configure", "auxiliary generation", "script generation", "script execution"])
+        self.assertEqual(build.stdout.splitlines()[:5],
+                         ["configure", "model", "auxiliary generation", "script generation", "script execution"])
         self.assertTrue((self.root / "build/vvp/demo.vvp").exists())
         self.assertFalse((self.root / "build/vvp/second.vvp").exists())
         self.assertTrue((self.root / "build/jobs/demo/build.sh").exists())
