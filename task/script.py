@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from models import ImplementationProgram, Program, ProgrammingTarget, Project, SynthesisProgram
+from models import Project
 from util import write_executable
-from . import bitstream, build, clean, cleandist, implementation, program, simulate, synthesis
+from . import build, clean, cleandist, simulate
 
 
 def generate_script(project: Project) -> None:
     simulation_cases = "|".join(project.simulation_ids)
     program_cases = "|".join(project.program_ids)
-    target_cases = "|".join((*project.simulation_ids, *project.program_ids))
+    target_cases = "|".join(("_project", *project.simulation_ids, *project.program_ids))
     dispatcher = [
         "#!/usr/bin/env bash", "set -euo pipefail",
         'PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"',
@@ -21,7 +21,7 @@ def generate_script(project: Project) -> None:
         'case "$command" in',
         '  clean|cleandist)',
         '    [[ "$#" -le 1 ]] || usage', '    target=${1:-_project}',
-        '    case "$target" in', f'      _project|{target_cases}) ;;',
+        '    case "$target" in', f'      {target_cases}) ;;',
         '      *) printf "Unknown target id: %s\\n" "$target" >&2; exit 2 ;;',
         '    esac', '    [[ "$#" -eq 0 ]] || shift', '    ;;',
         '  build|simulate)', '    [[ "$#" -eq 1 ]] || usage', '    target=$1', '    shift',
@@ -49,16 +49,6 @@ def generate_script(project: Project) -> None:
         build.generate_script(project, simulation)
         if project.command in {"script", "simulate"}:
             simulate.generate_script(project, simulation)
-    for target in project.programs:
-        if isinstance(target, SynthesisProgram):
-            synthesis.generate_script(project, target)
-        if isinstance(target, ImplementationProgram):
-            implementation.generate_script(project, target)
-        if isinstance(target, Program):
-            bitstream.generate_script(project, target)
-            if project.command == "script":
-                program.generate_script(project, ProgrammingTarget(
-                    target.identifier, target.bitstream, target.fpga.toolchain_roots,
-                ))
-        if isinstance(target, ProgrammingTarget):
-            program.generate_script(project, target)
+    if project.toolchain == "yosys":
+        from .yosys.script import generate_script as generate_yosys_script
+        generate_yosys_script(project)

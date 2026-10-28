@@ -9,13 +9,15 @@ import shlex
 from models import ProgrammingTarget, Project
 from util import (
     BUILDSYS_DIR, execute_job, relative, task_header, toolchain_header, write_executable,
+    selected_toolchain_header,
     require_program as validate,
 )
 
 
 def generate_script(project: Project, program: ProgrammingTarget) -> None:
     job_dir = project.job_dir(program)
-    header = [*task_header(project), *toolchain_header(program.toolchain_roots)]
+    header = [*task_header(project), *selected_toolchain_header("yosys"),
+              *toolchain_header(program.toolchain_roots)]
     bitstream = relative(project, program.bitstream)
     programming = BUILDSYS_DIR / "templates" / "program.sh"
     write_executable(job_dir / "program.sh", [

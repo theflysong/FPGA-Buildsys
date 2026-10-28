@@ -1,13 +1,13 @@
 # FPGA Buildsystem
 
-一个针对 FPGA 项目的构建系统, 基于 python 3.11+. 支持仿真, 综合, 实现, 生成比特流和烧录. 目前支持 Icarus Verilog 仿真器和 yosys + nextpnr + fasm2frames + xc7frames2bit 的 FPGA 工具链. 未来计划支持更多的仿真器和 FPGA 工具链.
+一个针对 FPGA 项目的构建系统, 基于 python 3.11+. 支持仿真, 综合, 实现, 生成比特流和烧录. 支持 Icarus Verilog 仿真器, 以及 Yosys 和 Vivado 两种 FPGA 工具链.
 
 ## How to use
 
 该项目要求 Python 3.11+, 前置库见 requirements.txt.
 要使用该系统, 请将仓库克隆到你的项目目录的子目录中.
 
-使用 `xpr` 命令时, 先初始化 buildsys 自己的虚拟环境, 并将 Vivado 加入 PATH:
+使用 Vivado 时, 将其加入 PATH; `xpr` 导出还需要先初始化 buildsys 自己的虚拟环境:
 
 ```sh
 ./buildsys init-venv
@@ -17,9 +17,37 @@
 
 ## 运行示例
 
+先为项目选择工具链, 选择会保存到项目根目录的 `.buildsys/toolchain.json`:
+
+```sh
+./buildsys toolchain yosys
+./buildsys toolchain          # 查看当前选择
+./buildsys script
+```
+
+也可以使用 `python3 main.py --project <项目目录> toolchain yosys`。
+`toolchain` 命令省略 `--project` 时使用当前目录；通过安装的入口调用时使用入口对应的项目目录。
+状态文件格式为 `{"name": "yosys"}`，也可选择 `vivado`。未选择时查询返回非零状态并提示选择命令。
+选择不依赖 `configuration.toml`、已安装的 FPGA 工具或许可证。
+
+`auxiliary`、`script` 必须先选择任意一种工具链；
+`synthesis`、`implementation`、`bitstream`、`program` 必须选择 `yosys`；
+`xpr` 和全部 `xpr-*` 命令必须选择 `vivado`。
+未选择、状态文件损坏或所选工具链不匹配时，在配置和生成文件之前返回错误，提示重新选择。
+`build`、`simulate`、`model`、`clean`、`cleandist`、`init`、`init-venv`、`install`、`completion` 及帮助不要求选择。
+
+切换时再次执行 `toolchain yosys` 或 `toolchain vivado`，只更新当前选择，不删除已有产物。
+`cleandist` 保留工具链选择。新生成的 Yosys FPGA 任务脚本在直接调用时也检查选择；升级后请重新生成旧脚本。
+将 `.buildsys/` 加入项目的 `.gitignore`，模板项目已默认忽略。
+
+专属任务分别位于 `task/yosys/` 和 `task/vivado/`，通用配置、源码模型、仿真和清理入口保留在 `task/`。
+选择 `yosys` 时，`auxiliary/script` 生成原有仿真及 FPGA 任务；选择 `vivado` 时，这两个命令只生成通用仿真任务，
+不要求 Yosys 的综合/实现/bitstream 配置，也不创建 FPGA 本地设置。Vivado 工程和阶段仍通过 `xpr` / `xpr-*` 显式执行。
+
 你可以通过 python3 脚本运行该构建系统, 如:
 
 ```sh
+python3 main.py --project [path-to-your-project] toolchain yosys
 python3 main.py --project [path-to-your-project] model
 python3 main.py --project [path-to-your-project] auxiliary
 python3 main.py --project [path-to-your-project] script
@@ -32,6 +60,7 @@ python3 main.py --project [path-to-your-project] simulate [target]
 ```sh
 python3 main.py install buildsys [path-to-your-project]
 cd [path-to-your-project]
+./buildsys toolchain yosys
 ./buildsys script
 ./buildsys.sh auxiliary
 ./buildsys build [target]
@@ -44,11 +73,13 @@ Windows 命令提示符中可使用:
 
 ```bat
 python main.py install buildsys C:\path\to\project
-C:\path\to\project\buildsys.bat auxiliary
+C:\path\to\project\buildsys.bat toolchain vivado
 C:\path\to\project\buildsys.bat xpr driver7seg
+C:\path\to\project\buildsys.bat xpr-simulation driver7seg
+C:\path\to\project\buildsys.bat xpr-bitstream driver7seg
 ```
 
-`auxiliary` 命令和 `build/auxiliary/` 目录使用完整名称, 避免 Windows 保留名限制. 已有项目升级后请重新运行 `script` 生成新路径的任务文件. `.bat` 提供 Windows 命令入口; 执行原有 Bash 构建与清理任务仍需要 Bash 及相应工具环境, `xpr` 直接通过 Python 调用 Vivado.
+`auxiliary` 命令和 `build/auxiliary/` 目录使用完整名称, 避免 Windows 保留名限制. 已有项目升级后请重新运行 `script` 生成新路径的任务文件. `.bat` 提供 Windows 命令入口; 执行原有 Bash 构建与清理任务仍需要 Bash 及相应工具环境. `xpr` 和 `xpr-*` 直接通过 Python 调用 Vivado, 不需要 Bash 或 WSL.
 
 在新建的空目录中安装入口后, 可以使用 `init` 创建模板项目:
 
@@ -80,6 +111,8 @@ source /usr/share/bash-completion/completions/buildsys
 
 按 Tab 时, 补全入口调用 `buildsys completion`. 仿真 id 合并 `build/auxiliary/*.f` 与 `configuration.toml` 中的 simulation id, 设计 id 合并 `build/auxiliary/*.ys` 与配置中的 project id, 并去重. `xpr` 命令仅补全 `[[xpr]]` 的 id. 配置中的 id 通过独立的 `completion_ids.py` 只读获取, 不要求目标的其他字段完整. 因此首次构建前、仅构建部分目标后、全项目 `cleandist` 后也能补全所有已配置目标. 删除或改名后仍可能补全旧辅助文件的 id, 可先清除旧辅助文件.
 
+`toolchain` 补全 `yosys`、`vivado`，无需已有选择。`xpr-*` 同样补全 `[[xpr]]` 的 id; `xpr-simulation <xpr-id>` 后只补全该 xpr 引用的 simulation id, `xpr-program` 补全 `--hw-server`、`--device`, 不连接硬件。
+
 补全不会执行 configure、生成文件、读取 FPGA 本地设置或探测 USB; 配置缺失或无效时静默跳过配置候选, 仍可使用已有辅助文件的 id. 跨目录调用快捷入口时仍读取该入口对应项目的配置.
 
 ## 构建流程
@@ -92,7 +125,7 @@ configure -> model -> auxiliary -> script ---|---> build -> simulate
                  |---> synthesis -> implementation -> bitstream -> program
 ```
 
-指定中间环节的任意一个(除program)都会触发前置环节的执行. 例如, `build` 会先执行 `configure`、`model`、`auxiliary` 和 `script`, 再开始构建. `model` 可单独生成符号表和文件依赖图; `auxiliary` 继续生成编译器辅助文件, `script` 继续生成任务脚本. `xpr` 执行 `configure → model → xpr`, 清理、烧录和补全跳过 model.
+指定中间环节的任意一个(除program)都会触发前置环节的执行. 例如, `build` 会先执行 `configure`、`model`、`auxiliary` 和 `script`, 再开始构建. `model` 可单独生成符号表和文件依赖图; `auxiliary` 继续生成编译器辅助文件, `script` 继续生成任务脚本. `xpr` 执行 `configure → model → xpr`, 清理、烧录和补全跳过 model. `xpr-*` 执行 `configure → Vivado Tcl`, 在 Tcl 中处理所需 run 依赖, 不触发 model 或工程导出.
 
 指定目标时, 配置校验和文件生成按目标及命令阶段进行. 例如 `simulate tb_example` 不要求其他 project 的构建字段或 FPGA 本地设置正确; `synthesis coreprog` 不要求实现、约束或比特流配置完整. 各命令要求如下:
 
@@ -105,8 +138,9 @@ configure -> model -> auxiliary -> script ---|---> build -> simulate
 | `bitstream` | 实现所需配置, 加 bitstream/frames 输出 |
 | `program` | 已有 bitstream 的路径、FPGA 引用、可选工具路径、显式 protocol; 无需源码、约束、数据库或 PYTHONPATH |
 | `xpr` | 当前 xpr 引用的 project、simulations、源码依赖、约束、FPGA part 和 xpr 输出目录 |
+| `xpr-simulation` / `xpr-synthesis` / `xpr-implementation` / `xpr-bitstream` / `xpr-program` | 公共配置、所选 xpr 的 project/simulations 引用、`directories.xpr` 和已有 `.xpr`; 无需源码、约束、FPGA part 或本地设置；`xpr-program` 还需要有效 bitstream 和可用 Hardware Server |
 | `clean` / `cleandist` | 所选目标的产物路径; 无需源码、约束或 FPGA 本地设置 |
-| `auxiliary` / `script` | 全量配置、全部源码依赖和 FPGA 本地设置格式 |
+| `auxiliary` / `script` | 已选择工具链、全部源码依赖；Yosys 校验全量仿真/FPGA 配置和本地设置格式，Vivado 校验通用仿真配置 |
 
 所有项目命令仍要求公共配置的 TOML 语法、项目基本信息及 simulation/project 任务 id 合法且唯一. `[[xpr]]` 的 id 使用独立命名空间, 可以与 project id 相同; 导出时要求全部 xpr id 合法且唯一. model 阶段扫描全部源码元数据以建立符号索引, 因此元数据必须存在、格式正确且导出符号唯一; 未被当前目标引用的缺失 import 或依赖环不会阻塞该目标. `model` / `auxiliary` / `script` 会检查全部源码依赖, 可用于检查整个项目. 公开配置及源码验证通过后才初始化 FPGA 本地设置; 单独运行 `model` 不读取或创建这些设置.
 
@@ -236,6 +270,7 @@ PYTHONPATH = ["~/opt/fpga/ego1/src/prjxray"]
 数据库或 `PYTHONPATH` 未填写时, `auxiliary`、`script`、仿真和清理仍可执行; 而 `synthesis`、`implementation`、`bitstream` 在调用工具前报出对应本地文件的位置. 已有比特流的 `program` 不要求数据库或 `PYTHONPATH`, 但仍必须显式指定 protocol. 烧录时本地文件不存在则使用 PATH; 存在时要求 TOML 可解析, 仅校验并应用 `toolchain-root`, 不设置或检查 PYTHONPATH 目录. 填好设置后重新执行目标命令或 `script` 刷新脚本; 之前生成的 FPGA 构建脚本也会拒绝缺少数据库或 `PYTHONPATH` 的流程, 并提示重新生成.
 
 ```sh
+./buildsys toolchain yosys
 ./buildsys script                         # 首次生成本地配置模板和任务脚本
 # 编辑 build/fpga/ego1.toml
 ./buildsys synthesis driver7seg
@@ -259,6 +294,7 @@ simulations = ["bin2bcd", "bcd2seg7", "tb_driver7seg"]
 ```
 
 ```sh
+./buildsys toolchain vivado
 ./buildsys xpr driver7seg_vivado  # 导出指定 xpr
 ./buildsys xpr                   # 导出所有 [[xpr]]
 ```
@@ -271,6 +307,40 @@ simulations = ["bin2bcd", "bcd2seg7", "tb_driver7seg"]
 
 导出不启动综合、实现或仿真. 重复导出会重新生成同名 Vivado 工程. Windows 中可使用 `buildsys.bat xpr [xpr-id]`.
 
+导出后可以直接在已有工程中运行 Vivado 阶段。下面五个命令只打开已有的
+`.xpr`, 不会重新导出或覆盖工程；工程不存在时会提示先执行 `xpr`:
+
+```bat
+buildsys.bat xpr-simulation driver7seg_vivado [simulation-id]
+buildsys.bat xpr-synthesis driver7seg_vivado
+buildsys.bat xpr-implementation driver7seg_vivado
+buildsys.bat xpr-bitstream driver7seg_vivado
+buildsys.bat xpr-program driver7seg_vivado [--hw-server localhost:3121] [--device "xc7*"]
+```
+
+省略 simulation id 时使用所选 xpr 配置中第一个仿真, 指定 id 必须属于该 xpr。
+仿真使用 `sim_<id>` 文件集, 设置运行时间为 `all`, 等待测试台 `$finish` 或所有事件结束后关闭仿真。
+波形 `.wdb` 和仿真日志保留在工程的 `.sim` 目录。Vivado 进程使用 `-mode batch`;
+`launch_simulation` 使用兼容 Vivado 2018.3 的 `-mode behavioral`, 因为该版本不接受仿真模式 `batch`。
+
+综合、实现和 bitstream 使用默认 `synth_1`、`impl_1` run。实现先确保综合成功,
+bitstream 先确保综合和实现成功, 再执行 `write_bitstream`。通过 run 的状态、进度和
+`NEEDS_REFRESH` 判断是否可复用; 失败、过期或不完整的 run 先 reset 再运行并等待完成。
+bitstream 还会检查 `PROGRAM.FILE` 或 run 目录内的 `.bit` 文件, 文件丢失时重新生成。
+`.runs`、`.sim`、日志和 bitstream 保留在 XPR 工程目录,
+不会写入配置中原有的 synthesis/implementation/bitstream 输出路径。
+
+五个阶段命令始终打开已有工程, 配置变更后需显式执行 `xpr <xpr-id>` 重新导出。
+阶段 Tcl 脚本、日志和 journal 保存在工程目录的 `.buildsys/` 下, 例如
+`.buildsys/synthesis.log`。Tcl 错误、Vivado 错误日志、run 失败或进程异常均返回非零状态,
+保留中间产物供检查; 命令默认等待执行完成, 不启动 GUI。
+
+`xpr-program` 只消费已有 bitstream，不会自动生成它；默认连接
+`localhost:3121`，`--hw-server` 可指定远程地址, `--device` 按设备名称 glob 选择首个匹配器件,
+省略时选择首个器件。没有有效 bitstream、连接失败、没有硬件、设备名称无匹配或编程失败时返回错误。
+它使用 Vivado Hardware Manager Tcl, 在 Vivado 2018.3 中使用旧名 `open_hw` / `close_hw`;
+现有 openFPGALoader 的 `program` 命令保持不变。自动测试仅模拟硬件, 实际烧录需要连接 FPGA 手工验收。
+
 Windows 下请先运行 Vivado 的 `settings64.bat`, 或将安装目录的 `bin` 加入当前终端的 `PATH`, 然后执行 `buildsys.bat xpr`. 构建系统通过 `cmd.exe` 启动 `vivado.bat`; Vivado 子进程会优先使用运行 buildsys 的 Python 所在目录, 并跳过 Microsoft Store 的应用别名目录, 避免 Tcl 桥接选中无法执行的 `python3` 别名.
 
 导出要求 `directories.sources`、`directories.constraints`、`directories.xpr`、引用 project 的 `fpga` / `top-symbol` / `constraints`、对应 FPGA 的 `part`, 以及引用 simulation 的 `top-symbol` / `timescale`; 不要求 yosys、Icarus 的产物路径或 FPGA 本地数据库、PYTHONPATH 配置. 省略目标时, 所有 xpr 及其引用均校验通过后才开始调用 Vivado. 指定目标时仅校验其引用的设计和仿真, 不要求其他目标的字段完整. `auxiliary` 和 `script` 不会自动导出 Vivado 工程.
@@ -280,5 +350,6 @@ Windows 下请先运行 Vivado 的 `settings64.bat`, 或将安装目录的 `bin`
  - 一个统一的构建系统, 支持仿真, 综合, 实现, 比特流生成和烧录.
  - 支持 Icarus Verilog 仿真器.
  - 支持 yosys + nextpnr + fasm2frames + xc7frames2bit 的 FPGA 工具链.
+ - 支持 Vivado XPR 工程导出、仿真、综合、实现、比特流生成和烧录；使用 `toolchain yosys|vivado` 按项目切换工具链.
  - 支持 Bash Tab 补全功能, 可以通过 Tab 键补全命令和目标.
  - `compact_json.py`: 压缩 yosys 生成的 JSON 文件, 以减少磁盘占用和提高解析速度.

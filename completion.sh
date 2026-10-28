@@ -50,13 +50,19 @@ directories() {
 }
 
 if (( position == 0 )); then
-    for command in model auxiliary script build simulate synthesis implementation bitstream program xpr clean cleandist init init-venv install completion; do
+    for command in model auxiliary script build simulate synthesis implementation bitstream program xpr xpr-simulation xpr-synthesis xpr-implementation xpr-bitstream xpr-program clean cleandist init init-venv install completion toolchain; do
         emit "$command"
     done
     exit 0
 fi
 
 case ${words[0]} in
+    toolchain)
+        if (( position == 1 )); then
+            emit yosys
+            emit vivado
+        fi
+        ;;
     build|simulate)
         if (( position == 1 )); then target_ids .f; fi
         ;;
@@ -68,6 +74,49 @@ case ${words[0]} in
             while IFS= read -r identifier; do
                 emit "$identifier"
             done < <(python3 "$script_dir/completion_ids.py" "$project_dir/configuration.toml" xpr 2>/dev/null)
+        fi
+        ;;
+    xpr-simulation|xpr-synthesis|xpr-implementation|xpr-bitstream)
+        if (( position == 1 )); then
+            while IFS= read -r identifier; do
+                emit "$identifier"
+            done < <(python3 "$script_dir/completion_ids.py" "$project_dir/configuration.toml" xpr 2>/dev/null)
+        elif [[ ${words[0]} == xpr-simulation ]] && (( position == 2 )); then
+            while IFS= read -r identifier; do
+                emit "$identifier"
+            done < <(python3 "$script_dir/completion_ids.py" "$project_dir/configuration.toml" xpr-simulation "${words[1]}" 2>/dev/null)
+        fi
+        ;;
+    xpr-program)
+        declare -A supplied=()
+        expecting_value=""
+        target_seen=0
+        for (( index=1; index<position; index++ )); do
+            word=${words[index]}
+            if [[ -n $expecting_value ]]; then
+                expecting_value=""
+                continue
+            fi
+            case $word in
+                --hw-server|--device)
+                    supplied[$word]=1
+                    expecting_value=$word
+                    ;;
+                --hw-server=*|--device=*) supplied[${word%%=*}]=1 ;;
+                -*) ;;
+                *) target_seen=1 ;;
+            esac
+        done
+        if [[ -n $expecting_value ]]; then
+            exit 0
+        elif (( ! target_seen )); then
+            while IFS= read -r identifier; do
+                emit "$identifier"
+            done < <(python3 "$script_dir/completion_ids.py" "$project_dir/configuration.toml" xpr 2>/dev/null)
+        else
+            for option in --hw-server --device; do
+                if [[ ! ${supplied[$option]+present} ]]; then emit "$option"; fi
+            done
         fi
         ;;
     clean|cleandist)

@@ -60,6 +60,10 @@ class XprSimulation:
     top: str
     timescale: str
 
+    @property
+    def fileset(self) -> str:
+        return f"sim_{self.identifier}"
+
 
 @dataclass(frozen=True)
 class XprProject:
@@ -70,6 +74,19 @@ class XprProject:
     constraints: Path
     simulations: tuple[XprSimulation, ...]
     xpr: Path
+
+
+@dataclass(frozen=True)
+class XprStageTarget:
+    """Resolved information used by commands operating on an existing XPR."""
+
+    xpr_id: str
+    xpr: Path
+    top: str
+    simulations: tuple[XprSimulation, ...]
+    synthesis_run: str = "synth_1"
+    implementation_run: str = "impl_1"
+    bitstream: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -103,11 +120,13 @@ class Project:
     program_ids: tuple[str, ...] = ()
     cleanup_targets: tuple[CleanupTarget, ...] = ()
     xprs: tuple[XprProject, ...] = ()
+    xpr_stages: tuple[XprStageTarget, ...] = ()
     source_directories: tuple[Path, ...] = ()
     simulation_directories: tuple[Path, ...] = ()
     fpgas: tuple[Fpga, ...] = ()
     exports: dict[str, str] = field(default_factory=dict)
     sources: dict[str, SourceModel] = field(default_factory=dict)
+    toolchain: str | None = None
 
     def is_simulation_source(self, source: str) -> bool:
         return any((self.root / source).is_relative_to(directory) for directory in self.simulation_directories)

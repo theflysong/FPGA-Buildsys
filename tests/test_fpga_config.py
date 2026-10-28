@@ -10,6 +10,8 @@ import sys
 import tempfile
 import unittest
 
+from toolchains import select_toolchain
+
 
 ENTRY = Path(__file__).resolve().parents[1] / "main.py"
 
@@ -19,6 +21,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="fpga local settings ")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        select_toolchain(self.root, "yosys")
         self.local = self.root / "build/fpga/ego1.toml"
         self.config = self.root / "configuration.toml"
         (self.root / "src").mkdir()

@@ -1,4 +1,4 @@
-"""Generate and execute the implementation task for one FPGA program."""
+"""Generate and execute the nextpnr implementation task for one FPGA program."""
 
 from __future__ import annotations
 

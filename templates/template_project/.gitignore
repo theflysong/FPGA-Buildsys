@@ -1,0 +1,4 @@
+.buildsys/
+build/
+jobs.sh
+__pycache__/

@@ -69,7 +69,9 @@ class CompletionTests(unittest.TestCase):
         shutil.rmtree(self.auxiliary)
         self.assertEqual(set(self.query()), {
             "model", "auxiliary", "script", "build", "simulate", "synthesis", "implementation",
-            "bitstream", "program", "xpr", "clean", "cleandist", "init", "init-venv", "install", "completion",
+            "bitstream", "program", "xpr", "xpr-simulation", "xpr-synthesis", "xpr-implementation",
+            "xpr-bitstream", "xpr-program", "clean", "cleandist", "init", "init-venv", "install", "completion",
+            "toolchain",
         })
         self.assertEqual(self.query("sim"), ["simulate"])
         self.assertEqual(self.query("ini"), ["init", "init-venv"])
@@ -82,6 +84,12 @@ class CompletionTests(unittest.TestCase):
                                 cwd=self.base, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("simulate", result.stdout.splitlines())
+
+    def test_toolchain_names_without_selection_or_valid_configuration(self) -> None:
+        self.assertEqual(self.query("toolchain", ""), ["yosys", "vivado"])
+        self.assertEqual(self.query("toolchain", "v"), ["vivado"])
+        self.assertEqual(self.query("toolchain", "yosys", ""), [])
+        self.assertFalse((self.root / ".buildsys").exists())
 
     def test_context_ids_and_live_file_changes(self) -> None:
         for command in ("build", "simulate"):

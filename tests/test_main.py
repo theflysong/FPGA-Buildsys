@@ -12,6 +12,8 @@ import sys
 import tempfile
 import unittest
 
+from toolchains import select_toolchain
+
 
 ENTRY = Path(__file__).resolve().parents[1] / "main.py"
 
@@ -25,6 +27,7 @@ class BuildSystemTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        select_toolchain(self.root, "yosys")
         (self.root / "src").mkdir()
         (self.root / "configuration.toml").write_text(
             'name = "Example"\nid = "example"\n'

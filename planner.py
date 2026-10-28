@@ -7,7 +7,8 @@ from pathlib import Path
 from models import Project
 from task import COMMANDS
 from task.auxiliary import generate_auxiliary
-from task.configure import configure, configure_fpgas
+from task.configure import configure
+from task.yosys.configure import configure_fpgas
 from task.model import build_model, generate_model
 from task.script import generate_script
 
@@ -26,6 +27,11 @@ class Planner:
         "cleandist": ("configure", "script generation", "script execution"),
         "program": ("configure", "script generation", "script execution"),
         "xpr": ("configure", "model", "xpr generation"),
+        "xpr-simulation": ("configure", "xpr stage execution"),
+        "xpr-synthesis": ("configure", "xpr stage execution"),
+        "xpr-implementation": ("configure", "xpr stage execution"),
+        "xpr-bitstream": ("configure", "xpr stage execution"),
+        "xpr-program": ("configure", "xpr stage execution"),
     }
 
     def run(self, root: Path, command: str, target_id: str | None = None,
@@ -56,4 +62,6 @@ class Planner:
                     generate_script(project)
             else:
                 assert project is not None
-                workflow.execute(project, target_id, task_args, temporary_script)
+                result = workflow.execute(project, target_id, task_args, temporary_script)
+                if isinstance(result, Project):
+                    project = result

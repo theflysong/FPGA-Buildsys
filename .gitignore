@@ -1,5 +1,6 @@
 .vscode/
 .venv/
+.buildsys/
 __pycache__/
 buildsys
 buildsys.sh

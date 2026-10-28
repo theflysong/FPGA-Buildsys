@@ -15,6 +15,7 @@ from task.auxiliary import generate_auxiliary
 from task.clean import cleanup_script
 from task.configure import configure
 from task.model import build_model, generate_model
+from toolchains import select_toolchain
 from util import ConfigError, source_closure
 
 
@@ -26,6 +27,7 @@ class ModelTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="buildsys-model-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        select_toolchain(self.root, "yosys")
         (self.root / "src").mkdir()
         (self.root / "sim").mkdir()
         self.config = self.root / "configuration.toml"

@@ -19,6 +19,7 @@ from completion_ids import candidate_ids
 from models import XprProject
 from task.configure import configure as configure_project
 from task.model import build_model
+from toolchains import select_toolchain
 from util import ConfigError
 
 
@@ -119,6 +120,7 @@ class XprTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="xpr {$[literal]}; ")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        select_toolchain(self.root, "vivado")
         (self.root / "src").mkdir()
         (self.root / "sim").mkdir()
         (self.root / "constraints").mkdir()
@@ -259,6 +261,7 @@ class XprTests(unittest.TestCase):
             configure(self.root, "xpr", "export")
 
     def test_project_schema_is_used_by_build_program_and_cleanup(self) -> None:
+        select_toolchain(self.root, "yosys")
         text = self.original.replace('[[simulation]]\nid = "unfinished_simulation"\n', '')
         text = text.replace('xpr = "build/xpr"\n',
                             'xpr = "build/xpr"\nvvp = "build/vvp"\nvcd = "build/vcd"\n'
@@ -424,7 +427,7 @@ class XprTests(unittest.TestCase):
     @unittest.skipUnless(HAS_PYTCL and HAS_TCL, "Install requirements.txt and tkinter for pytcl integration")
     def test_missing_vivado_and_tcl_errors_are_reported(self) -> None:
         self.vivado.rename(self.tools / "vivado.disabled")
-        with patch("task.xpr.shutil.which", return_value=None):
+        with patch("task.vivado.xpr.shutil.which", return_value=None):
             stderr = io.StringIO()
             with redirect_stderr(stderr):
                 result = main.main(["--project", str(self.root), "xpr", "export"])

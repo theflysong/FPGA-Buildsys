@@ -149,12 +149,18 @@ def toolchain_header(toolchain_roots: tuple[Path, ...]) -> list[str]:
     ]
 
 
+def selected_toolchain_header(name: str) -> list[str]:
+    validator = shlex.quote(str(BUILDSYS_DIR / "toolchains.py"))
+    return [f'python3 {validator} "$PROJECT_ROOT" {shlex.quote(name)}']
+
+
 def program_header(project: Project, program: SynthesisProgram) -> list[str]:
     lines = [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         'PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"',
         'cd "$PROJECT_ROOT"',
+        *selected_toolchain_header("yosys"),
         f"FPGA_PART={shlex.quote(program.fpga.part)}",
         f"XRAY_DATABASE={shlex.quote(str(program.fpga.xray_database) if program.fpga.xray_database else '')}",
         "export FPGA_PART XRAY_DATABASE",

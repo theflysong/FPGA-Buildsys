@@ -42,6 +42,8 @@ class InitTests(unittest.TestCase):
             self.assertEqual((self.root / name).read_bytes(), content)
             self.assertEqual((self.root / name).stat().st_mode, mode)
         # Configuring the new project checks metadata and source dependency resolution.
+        selection = self.run_command(str(self.root / "buildsys"), "toolchain", "yosys")
+        self.assertEqual(selection.returncode, 0, selection.stderr)
         configured = self.run_command(str(self.root / "buildsys"), "auxiliary")
         self.assertEqual(configured.returncode, 0, configured.stderr)
         self.assertIn("sim/tbSimulation.v", (self.root / "build/auxiliary/example_simulation.f").read_text())

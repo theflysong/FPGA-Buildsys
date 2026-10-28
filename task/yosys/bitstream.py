@@ -1,4 +1,4 @@
-"""Generate and execute the bitstream task for one FPGA program."""
+"""Generate and execute the Project X-Ray bitstream task for one FPGA program."""
 
 from __future__ import annotations
 

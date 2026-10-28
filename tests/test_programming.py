@@ -10,6 +10,8 @@ import sys
 import tempfile
 import unittest
 
+from toolchains import select_toolchain
+
 ENTRY = Path(__file__).resolve().parents[1] / "main.py"
 HEADER = "Bus device vid:pid       probe type      manufacturer serial               product"
 
@@ -19,6 +21,7 @@ class ProgrammingTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="buildsys programming ")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        select_toolchain(self.root, "yosys")
         (self.root / "src").mkdir()
         (self.root / "constraints").mkdir()
         (self.root / "constraints/board.xdc").write_text("# constraints\n")

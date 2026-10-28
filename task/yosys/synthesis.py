@@ -1,4 +1,4 @@
-"""Generate and execute the synthesis task for one FPGA program."""
+"""Generate and execute the Yosys synthesis task for one FPGA program."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Export one [[xpr]] target, or all targets, with its design and simulations."""
+"""Export one Vivado [[xpr]] target, or all targets, with its design and simulations."""
 
 from __future__ import annotations
 
