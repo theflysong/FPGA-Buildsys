@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import json
+import contextlib
+import io
 from pathlib import Path
 import shlex
 import shutil
@@ -22,11 +25,14 @@ from task import install as installation_task
 ENTRY = BUILDSYS_DIR / "main.py"
 ADAPTER = BUILDSYS_DIR / "bash-completion/buildsys.bash"
 BOOTSTRAP = Path("/usr/share/bash-completion/bash_completion")
+BASH = str(Path("C:/Program Files/Git/bin/bash.exe")) if os.name == "nt" else shutil.which("bash")
 
 
 class CompletionTests(unittest.TestCase):
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory()
+        # Git Bash mounts the Windows temp directory as /tmp; relative paths
+        # from that mount do not have the same parents as native Windows paths.
+        temporary = tempfile.TemporaryDirectory(dir=BUILDSYS_DIR if os.name == "nt" else None)
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)
         self.root = self.base / "project with spaces"
@@ -38,11 +44,22 @@ class CompletionTests(unittest.TestCase):
             (self.auxiliary / name).write_text("exit 99\n")
         (self.auxiliary / "not_a_file.f").mkdir()
         (self.auxiliary / "invalid id.f").touch()
-        installed = subprocess.run(
-            [sys.executable, str(ENTRY), "install", str(self.root)],
-            capture_output=True, text=True,
-        )
-        self.assertEqual(installed.returncode, 0, installed.stderr)
+        if os.name == "nt":
+            # Isolate wrappers from the checkout's Windows-only .venv, which
+            # cannot be activated by Git Bash. Exercise real candidate logic.
+            source = self.base / "source"
+            source.mkdir()
+            (source / "main.py").write_text(
+                f"import runpy, sys\nsys.path.insert(0, {str(BUILDSYS_DIR)!r})\n"
+                f"runpy.run_path({str(ENTRY)!r}, run_name='__main__')\n", encoding="utf-8")
+            with patch.object(installation_task, "BUILDSYS_DIR", source), contextlib.redirect_stdout(io.StringIO()):
+                installation_task.install_wrappers(self.root)
+        else:
+            installed = subprocess.run(
+                [sys.executable, str(ENTRY), "install", str(self.root)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(installed.returncode, 0, installed.stderr)
         self.env = dict(os.environ)
         fake_tools = self.base / "tools"
         fake_tools.mkdir()
@@ -50,12 +67,24 @@ class CompletionTests(unittest.TestCase):
             script = fake_tools / name
             script.write_text('#!/bin/sh\nprintf "called\\n" >> "$SIDE_EFFECT_LOG"\nexit 99\n')
             script.chmod(0o755)
-        self.env["PATH"] = f"{fake_tools}:{self.env['PATH']}"
+        if os.name == "nt":
+            # Git Bash needs an actual python3 launcher, not the Windows alias.
+            (fake_tools / "python3").write_text(
+                f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "$@"\n', encoding="utf-8")
+        self.env["PATH"] = f"{fake_tools}{os.pathsep}{self.env['PATH']}"
         self.env["SIDE_EFFECT_LOG"] = str(self.base / "side-effects")
 
     def query(self, *words: str, wrapper: str = "buildsys") -> list[str]:
+        if os.name == "nt" and wrapper == "buildsys":
+            command = [str(self.root / "buildsys.bat")]
+        elif os.name == "nt":
+            if not BASH or not Path(BASH).is_file():
+                self.skipTest("native Git Bash is unavailable")
+            command = [BASH, (self.root / wrapper).as_posix()]
+        else:
+            command = [str(self.root / wrapper)]
         result = subprocess.run(
-            [str(self.root / wrapper), "completion", "--", *words],
+            [*command, "completion", "--", *words],
             cwd=self.base, env=self.env, capture_output=True, text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -175,13 +204,47 @@ class CompletionTests(unittest.TestCase):
         for item in ("buildsys", "completion"):
             self.assertEqual(self.query("install", item, "dest"), ["destination with spaces/"])
         self.assertEqual(self.query("install", "unknown", "dest"), [])
-        self.assertEqual(self.query("install", "completion", "destination", ""), [])
+        self.assertEqual(self.query("install", "completion", "destination", ""), ["--terminal"])
+
+    def test_terminal_candidates(self) -> None:
+        self.assertEqual(self.query("install", "completion", "--t"), ["--terminal"])
+        self.assertEqual(self.query("install", "completion", "--terminal="),
+                         ["--terminal=bash", "--terminal=powershell"])
+        self.assertEqual(self.query("install", "completion", "--terminal=p"), ["--terminal=powershell"])
+        self.assertEqual(self.query("install", "completion", "--terminal", ""), ["bash", "powershell"])
+        self.assertEqual(self.query("install", "completion", "--terminal", "b"), ["bash"])
+        (self.base / "destination").mkdir()
+        self.assertEqual(self.query("install", "completion", "--terminal=powershell", "dest"), ["destination/"])
+        self.assertEqual(self.query("install", "completion", "destination", "--terminal", "p"), ["powershell"])
+        self.assertEqual(self.query("install", "completion", "destination", "--terminal=bash", ""), [])
+        self.assertEqual(self.query("install", "buildsys", "--t"), [])
+
+    def test_json_preserves_empty_and_unicode_words(self) -> None:
+        (self.base / "中文 '目录").mkdir()
+        for words, expected in ((["simulate", ""], ["demo", "tb_other"]),
+                                (["install", "completion", "中文 '"], ["中文 '目录/"])):
+            result = subprocess.run(
+                [sys.executable, str(ENTRY), "--project", str(self.root), "completion", "--json"],
+                input=json.dumps(words), cwd=self.base, env=self.env, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), expected)
+        for value in ('{', '{}', '[1]', '[null]'):
+            result = subprocess.run([sys.executable, str(ENTRY), "completion", "--json"],
+                                    input=value, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("completion JSON", result.stderr)
+
+    def test_invalid_utf8_configuration_is_ignored(self) -> None:
+        (self.root / "configuration.toml").write_bytes(b"\xff\xfe invalid TOML")
+        self.assertEqual(self.query("simulate", ""), ["demo", "tb_other"])
+        self.assertEqual(self.query("xpr-simulation", "missing", ""), [])
 
     def test_install_completion_to_custom_directory(self) -> None:
         destination = self.base / "completion destination"
         destination.mkdir()
         result = subprocess.run(
-            [str(self.root / "buildsys"), "install", "completion", destination.name],
+            [sys.executable, str(ENTRY), "install", "completion", destination.name, "--terminal=bash"],
             cwd=self.base, env=self.env, capture_output=True, text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -189,16 +252,17 @@ class CompletionTests(unittest.TestCase):
         for name in ("buildsys", "buildsys.sh"):
             adapter = destination / name
             self.assertEqual(adapter.read_bytes(), ADAPTER.read_bytes())
-            self.assertEqual(adapter.stat().st_mode & 0o777, 0o644)
+            if os.name != "nt":
+                self.assertEqual(adapter.stat().st_mode & 0o777, 0o644)
         self.assertFalse((self.root / "jobs.sh").exists())
         missing = subprocess.run(
-            [str(self.root / "buildsys"), "install", "completion", str(destination / "absent")],
+            [sys.executable, str(ENTRY), "install", "completion", str(destination / "absent"), "--terminal=bash"],
             capture_output=True, text=True,
         )
         self.assertNotEqual(missing.returncode, 0)
         self.assertIn("install directory does not exist", missing.stderr)
         unknown = subprocess.run(
-            [str(self.root / "buildsys"), "install", "unknown", str(destination)],
+            [sys.executable, str(ENTRY), "install", "unknown", str(destination)],
             capture_output=True, text=True,
         )
         self.assertEqual(unknown.returncode, 2)
@@ -207,25 +271,56 @@ class CompletionTests(unittest.TestCase):
     def test_install_default_destinations(self) -> None:
         with patch.object(installation_task, "install_completion") as installer:
             self.assertEqual(buildsys_entry.main(["install", "completion"]), 0)
-            installer.assert_called_once_with(Path("/usr/share/bash-completion/completions"))
+            installer.assert_called_once_with(None, "powershell" if os.name == "nt" else "bash")
+        for terminal in ("bash", "powershell"):
+            for option in ([f"--terminal={terminal}"], ["--terminal", terminal]):
+                with patch.object(installation_task, "install_completion") as installer:
+                    self.assertEqual(buildsys_entry.main(["install", "completion", *option]), 0)
+                    installer.assert_called_once_with(None, terminal)
         for args in (["install"], ["install", "buildsys"]):
             with patch.object(installation_task, "install_wrappers") as installer:
                 self.assertEqual(buildsys_entry.main(args), 0)
                 installer.assert_called_once_with(Path.cwd())
 
     def test_bash_adapter_without_bootstrap(self) -> None:
+        if not BASH or not Path(BASH).is_file():
+            self.skipTest("native Bash is unavailable")
         result = subprocess.run([
-            "bash", "-c", '''set -eu
+            BASH, "-c", '''set -eu
 source "$1"
 shift
 COMP_WORDS=("$@")
 COMP_CWORD=$(( ${#COMP_WORDS[@]} - 1 ))
 _buildsys_complete
 if (( ${#COMPREPLY[@]} )); then printf '%s\\n' "${COMPREPLY[@]}"; fi
-''', "completion-test", str(ADAPTER), str(self.root / "buildsys"), "simulate", "tb",
+''', "completion-test", ADAPTER.as_posix(), (self.root / "buildsys").as_posix(), "simulate", "tb",
         ], cwd=self.base, env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ["tb_other"])
+
+    def test_bash_adapter_terminal_equals_and_split_words(self) -> None:
+        if not BASH or not Path(BASH).is_file():
+            self.skipTest("native Bash is unavailable")
+        for words, expected in (
+            (("install", "completion", "--terminal=p"), ["powershell"]),
+            (("install", "completion", "--terminal", "=", "p"), ["powershell"]),
+            (("install", "completion", "--terminal", "=", ""), ["bash", "powershell"]),
+            (("install", "completion", "--terminal", "p"), ["powershell"]),
+            (("install", "completion", "--terminal", "=", "bash", "dest"), ["destination/"]),
+        ):
+            (self.base / "destination").mkdir(exist_ok=True)
+            result = subprocess.run([
+                BASH, "-c", '''set -eu
+source "$1"
+shift
+COMP_WORDS=("$@")
+COMP_CWORD=$(( ${#COMP_WORDS[@]} - 1 ))
+_buildsys_complete
+if (( ${#COMPREPLY[@]} )); then printf '%s\\n' "${COMPREPLY[@]}"; fi
+''', "completion-test", ADAPTER.as_posix(), (self.root / "buildsys").as_posix(), *words,
+            ], cwd=self.base, env=self.env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), expected, words)
 
     @unittest.skipUnless(BOOTSTRAP.is_file(), "bash-completion is not installed")
     def test_lazy_loading_for_both_wrappers_and_paths(self) -> None:
@@ -239,7 +334,7 @@ if (( ${#COMPREPLY[@]} )); then printf '%s\\n' "${COMPREPLY[@]}"; fi
         completions = data / "bash-completion/completions"
         completions.mkdir(parents=True)
         installed = subprocess.run(
-            [str(self.root / "buildsys"), "install", "completion", str(completions)],
+            [sys.executable, str(ENTRY), "install", "completion", str(completions), "--terminal=bash"],
             capture_output=True, text=True,
         )
         self.assertEqual(installed.returncode, 0, installed.stderr)

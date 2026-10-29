@@ -16,7 +16,7 @@ def candidate_ids(path: Path, kind: str) -> list[str]:
     try:
         with path.open("rb") as stream:
             data = tomllib.load(stream)
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
         return []
     entries = data.get(kind, [])
     if not isinstance(entries, list):
@@ -36,7 +36,7 @@ def xpr_simulation_ids(path: Path, xpr_id: str) -> list[str]:
     try:
         with path.open("rb") as stream:
             data = tomllib.load(stream)
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
         return []
     xprs = data.get("xpr", [])
     if not isinstance(xprs, list):

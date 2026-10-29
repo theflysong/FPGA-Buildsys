@@ -95,12 +95,22 @@ cd my-project
 
 模板测试台 `tbSimulation` 从仿真时间 0 开始依次读取 `Hello,World!`, 每隔 500 ms 切换到下一个地址, 每个字符保持 500 ms, 在 6 秒仿真时间后结束。连续相同字符的数据值保持不变。运行仿真需要 `iverilog` 和 `vvp`, 波形输出到 `build/sim/example.vcd`。这里的时间是仿真时间。
 
-此外, 还可以安装 Bash Tab 补全功能. 这需要 `sudo` 权限, 并且需要将补全文件安装到 `/usr/share/bash-completion/completions` 或其他 Bash 补全搜索路径中:
+此外, 还可以安装 Bash 或 PowerShell 的 Tab 补全功能:
+
+```text
+./buildsys install completion [directory] [--terminal=bash|powershell]
+```
+
+`--terminal` 在 Windows 默认是 `powershell`, Linux 及其他非 Windows 平台默认是 `bash`;
+也接受 `--terminal powershell` 写法. 该参数仅用于 `install completion`.
+
+Bash 默认安装到 `/usr/share/bash-completion/completions`, 写入系统目录通常需要 `sudo`;
+也可指定已有的 Bash 补全搜索目录:
 
 ```sh
-sudo python3 main.py install completion
+sudo python3 main.py install completion --terminal=bash
 # 或者指定安装目录
-sudo python3 main.py install completion /usr/share/bash-completion/completions
+sudo python3 main.py install completion /usr/share/bash-completion/completions --terminal=bash
 ```
 
 安装后打开新终端, 或在当前终端执行:
@@ -109,7 +119,30 @@ sudo python3 main.py install completion /usr/share/bash-completion/completions
 source /usr/share/bash-completion/completions/buildsys
 ```
 
-按 Tab 时, 补全入口调用 `buildsys completion`. 仿真 id 合并 `build/auxiliary/*.f` 与 `configuration.toml` 中的 simulation id, 设计 id 合并 `build/auxiliary/*.ys` 与配置中的 project id, 并去重. `xpr` 命令仅补全 `[[xpr]]` 的 id. 配置中的 id 通过独立的 `completion_ids.py` 只读获取, 不要求目标的其他字段完整. 因此首次构建前、仅构建部分目标后、全项目 `cleandist` 后也能补全所有已配置目标. 删除或改名后仍可能补全旧辅助文件的 id, 可先清除旧辅助文件.
+PowerShell 中可使用（Windows 默认选择 PowerShell）:
+
+```powershell
+./buildsys install completion
+# 显式选择, 或安装到已有目录
+./buildsys install completion --terminal=powershell
+./buildsys install completion 'C:\my completions' --terminal=powershell
+```
+
+安装程序通过 PATH 检测 Windows PowerShell 5.1 (`powershell`) 和 PowerShell 7 (`pwsh`),
+为所有检测到的版本自动配置当前用户的 `$PROFILE.CurrentUserAllHosts`.
+默认补全脚本位于各 profile 所在目录的 `completions/buildsys.ps1`, 目录不存在时自动创建;
+指定安装目录时, 各版本 profile 都加载该目录中的 `buildsys.ps1`.
+重复安装会更新标记块而不重复添加, 保留原有 profile 内容和编码; 新文件使用 UTF-8 BOM.
+安装后打开新终端, 或执行安装程序输出的 `. '.../buildsys.ps1'` 命令在当前会话加载.
+支持 `buildsys`、`buildsys.bat`、`buildsys.sh` 及相对或绝对路径调用. 安装和补全查询不需要 Bash 或 WSL.
+PowerShell 补全查询在与交互终端隔离的子进程中执行, 避免批处理激活虚拟环境时切换代码页影响当前终端显示.
+
+两种终端共享 Python 候选生成逻辑, 按 Tab 时通过 `buildsys completion` 查询.
+普通接口 `completion -- <words...>` 逐行输出候选, 最后一个参数是当前输入前缀;
+PowerShell 使用 `completion --json`, 从标准输入读取字符串数组并输出 JSON 候选数组, 保留空参数及中文路径.
+`install completion` 还补全 `--terminal` 及 `bash`、`powershell` 两个取值.
+
+仿真 id 合并 `build/auxiliary/*.f` 与 `configuration.toml` 中的 simulation id, 设计 id 合并 `build/auxiliary/*.ys` 与配置中的 project id, 并去重. `xpr` 命令仅补全 `[[xpr]]` 的 id. 配置中的 id 通过独立的 `completion_ids.py` 只读获取, 不要求目标的其他字段完整. 因此首次构建前、仅构建部分目标后、全项目 `cleandist` 后也能补全所有已配置目标. 删除或改名后仍可能补全旧辅助文件的 id, 可先清除旧辅助文件.
 
 `toolchain` 补全 `yosys`、`vivado`，无需已有选择。`xpr-*` 同样补全 `[[xpr]]` 的 id; `xpr-simulation <xpr-id>` 后只补全该 xpr 引用的 simulation id, `xpr-program` 补全 `--hw-server`、`--device`, 不连接硬件。
 
