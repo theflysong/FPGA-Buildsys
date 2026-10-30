@@ -1,0 +1,23 @@
+@echo off
+setlocal DisableDelayedExpansion
+rem Short paths keep literal percent signs from being expanded again by CALL.
+for %%I in ("%~sdp0$(main_relative)") do set "BUILDSYS_DIR=%%~dpI"
+set "BUILDSYS_VENV=%BUILDSYS_DIR%.venv"
+if not exist "%BUILDSYS_VENV%\" goto system_python
+if not exist "%BUILDSYS_VENV%\Scripts\activate.bat" goto incomplete_venv
+if not exist "%BUILDSYS_VENV%\Scripts\python.exe" goto incomplete_venv
+if defined VIRTUAL_ENV for %%I in ("%VIRTUAL_ENV%\.") do for %%J in ("%BUILDSYS_VENV%\.") do if /i "%%~fsI"=="%%~fsJ" goto venv_python
+call "%BUILDSYS_VENV%\Scripts\activate.bat"
+if errorlevel 1 goto activation_failed
+:venv_python
+"%BUILDSYS_VENV%\Scripts\python.exe" "%~dp0$(main_relative)" --project "%~dp0." %*
+exit /b %errorlevel%
+:incomplete_venv
+echo error: incomplete buildsys virtual environment: "%BUILDSYS_VENV%" >&2
+exit /b 1
+:activation_failed
+echo error: failed to activate buildsys virtual environment: "%BUILDSYS_VENV%" >&2
+exit /b 1
+:system_python
+python "%~dp0$(main_relative)" --project "%~dp0." %*
+exit /b %errorlevel%

@@ -1,0 +1,6 @@
+read_verilog -sv $(sources)
+synth_xilinx -family xc7 -top $(top)
+check -assert
+stat
+hierarchy -top $(top) -purge_lib
+write_json

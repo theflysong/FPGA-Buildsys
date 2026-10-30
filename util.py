@@ -16,10 +16,7 @@ BUILDSYS_DIR = Path(__file__).resolve().parent
 ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 SYMBOL_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*\Z")
 TIMESCALE_RE = re.compile(r"(?:1|10|100)(?:s|ms|us|ns|ps|fs)/(?:1|10|100)(?:s|ms|us|ns|ps|fs)\Z")
-TMPFS_CHECK = (
-    '[[ -d /dev/shm && "$(stat -f -c %T /dev/shm 2>/dev/null)" == tmpfs ]] || '
-    '{ printf "A tmpfs mount at /dev/shm is required for build logs.\\n" >&2; exit 2; }'
-)
+TEMPLATE_ARGUMENT_RE = re.compile(r"\$\$\(|\$\(([A-Za-z_][A-Za-z0-9_]*)\)")
 
 
 class ConfigError(Exception):
@@ -118,16 +115,40 @@ def yosys_quote(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def render_template(template_name: str, /, **arguments: str) -> str:
+    """Substitute $(name) once; $$( emits a literal $( for shell commands."""
+    path = BUILDSYS_DIR / "templates" / template_name
+
+    def substitute(match: re.Match[str]) -> str:
+        if match.group(0) == "$$(":
+            return "$("
+        key = match.group(1)
+        if key not in arguments:
+            raise ConfigError(f"{path}: missing template argument {key!r}")
+        return arguments[key]
+
+    return TEMPLATE_ARGUMENT_RE.sub(substitute, path.read_text(encoding="utf-8"))
+
+
+def write_template(path: Path, template_name: str, *, newline: str = "\n",
+                   executable: bool = False, **arguments: str) -> None:
+    content = render_template(template_name, **arguments)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8", newline=newline)
+    if executable:
+        path.chmod(0o755)
+
+
 def write_executable(path: Path, lines: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     path.chmod(0o755)
 
 
 def task_header(project: Project, *, temporary: bool = False) -> list[str]:
-    root = (f"PROJECT_ROOT={shlex.quote(str(project.root))}" if temporary else
-            'PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"')
-    return ["#!/usr/bin/env bash", "set -euo pipefail", root, 'cd "$PROJECT_ROOT"']
+    root = (shlex.quote(str(project.root)) if temporary else
+            render_template("shell/task-root.sh").rstrip("\n"))
+    return render_template("shell/task-header.sh", project_root=root).splitlines()
 
 
 def fpga_config_path(root: Path, identifier: str) -> Path:
@@ -138,51 +159,29 @@ def toolchain_header(toolchain_roots: tuple[Path, ...]) -> list[str]:
     if not toolchain_roots:
         return []
     roots = " ".join(shlex.quote(str(root)) for root in toolchain_roots)
-    return [
-        f"TOOLCHAIN_ROOTS=({roots})",
-        'toolchain_path=""',
-        'for toolchain_root in "${TOOLCHAIN_ROOTS[@]}"; do',
-        '  [[ -d "$toolchain_root" ]] || { printf "Missing toolchain root: %s\\n" "$toolchain_root" >&2; exit 2; }',
-        '  toolchain_path+="$toolchain_root:$toolchain_root/bin:"',
-        'done',
-        'export PATH="${toolchain_path}$PATH"',
-    ]
+    return render_template("shell/toolchain-header.sh", roots=roots).splitlines()
 
 
 def selected_toolchain_header(name: str) -> list[str]:
     validator = shlex.quote(str(BUILDSYS_DIR / "toolchains.py"))
-    return [f'python3 {validator} "$PROJECT_ROOT" {shlex.quote(name)}']
+    return render_template("shell/selected-toolchain.sh", validator=validator,
+                           toolchain=shlex.quote(name)).splitlines()
 
 
 def program_header(project: Project, program: SynthesisProgram) -> list[str]:
-    lines = [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"',
-        'cd "$PROJECT_ROOT"',
-        *selected_toolchain_header("yosys"),
-        f"FPGA_PART={shlex.quote(program.fpga.part)}",
-        f"XRAY_DATABASE={shlex.quote(str(program.fpga.xray_database) if program.fpga.xray_database else '')}",
-        "export FPGA_PART XRAY_DATABASE",
-    ]
     python_paths = " ".join(shlex.quote(str(path)) for path in program.fpga.python_paths)
-    lines.append(f"FPGA_PYTHONPATHS=({python_paths})")
-    lines.extend([
-        f"FPGA_CONFIG={shlex.quote(relative(project, fpga_config_path(project.root, program.fpga.identifier)))}",
-        '[[ -n "$XRAY_DATABASE" ]] || { printf "Fill xray-database in %s, then run buildsys script or the target command to regenerate scripts.\\n" "$FPGA_CONFIG" >&2; exit 2; }',
-        '(( ${#FPGA_PYTHONPATHS[@]} > 0 )) || { printf "Fill PYTHONPATH in %s with Python module directories, then regenerate scripts.\\n" "$FPGA_CONFIG" >&2; exit 2; }',
-    ])
-    lines.extend(toolchain_header(program.fpga.toolchain_roots))
-    if program.fpga.python_paths:
-        lines.extend([
-            'fpga_pythonpath=""',
-            'for python_path in "${FPGA_PYTHONPATHS[@]}"; do',
-            '  [[ -d "$python_path" ]] || { printf "Missing PYTHONPATH directory: %s\\n" "$python_path" >&2; exit 2; }',
-            '  fpga_pythonpath+="$python_path:"',
-            'done',
-            'export PYTHONPATH="${fpga_pythonpath%:}${PYTHONPATH:+:$PYTHONPATH}"',
-        ])
-    return lines
+    return render_template(
+        "yosys/program-header.sh",
+        task_header="\n".join(task_header(project)),
+        selection="\n".join(selected_toolchain_header("yosys")),
+        part=shlex.quote(program.fpga.part),
+        database=shlex.quote(str(program.fpga.xray_database) if program.fpga.xray_database else ""),
+        python_paths=python_paths,
+        config=shlex.quote(relative(project, fpga_config_path(project.root, program.fpga.identifier))),
+        toolchain_header="\n".join(toolchain_header(program.fpga.toolchain_roots)),
+        pythonpath_header=render_template("shell/pythonpath-header.sh").rstrip("\n")
+        if program.fpga.python_paths else "",
+    ).splitlines()
 
 
 def selected_targets(project: Project, target_id: str | None) -> tuple[CleanupTarget, ...]:

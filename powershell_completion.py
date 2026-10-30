@@ -11,7 +11,7 @@ import re
 import shutil
 import subprocess
 
-from util import BUILDSYS_DIR, ConfigError
+from util import BUILDSYS_DIR, ConfigError, render_template
 
 
 START_MARKER = "# >>> buildsys completion >>>"
@@ -26,8 +26,7 @@ def discover_profiles() -> list[Path]:
             continue
         result = subprocess.run([
             executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-            "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; "
-            "ConvertTo-Json -Compress -InputObject ([string]$PROFILE.CurrentUserAllHosts)",
+            render_template("powershell/discover-profile.ps1"),
         ], capture_output=True, encoding="utf-8-sig", check=True)
         try:
             profile = json.loads(result.stdout)
@@ -69,7 +68,7 @@ def profile_content(path: Path, script: Path) -> bytes:
         content = raw.decode(encoding)
     newline = "\r\n" if "\r\n" in content else "\n"
     literal = quote_path(script)
-    loader = f"if (Test-Path -LiteralPath {literal}) {{ . {literal} }}"
+    loader = render_template("powershell/profile-loader.ps1", script=literal).rstrip("\n")
     try:
         loader.encode(encoding)
         needs_ascii = not bom and not loader.isascii()
@@ -79,8 +78,8 @@ def profile_content(path: Path, script: Path) -> bytes:
         # Legacy ANSI profiles may not represent a new installation path.
         # ASCII loaders also work in BOM-less UTF-8 profiles on PowerShell 5.1.
         encoded = base64.b64encode(str(script).encode("utf-8")).decode("ascii")
-        literal = f"([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded}')))"
-        loader = f"if (Test-Path -LiteralPath {literal}) {{ . {literal} }}"
+        literal = render_template("powershell/encoded-path.ps1", encoded_path=encoded).rstrip("\n")
+        loader = render_template("powershell/profile-loader.ps1", script=literal).rstrip("\n")
     block = newline.join((START_MARKER, loader, END_MARKER, ""))
     pattern = re.compile(r"(?ms)^" + re.escape(START_MARKER) + r"\r?\n.*?^"
                          + re.escape(END_MARKER) + r"(?:\r?\n|$)")

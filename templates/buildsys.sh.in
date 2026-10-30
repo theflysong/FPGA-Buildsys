@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+MAIN_REL=$(main_relative)
+MAIN_PATH="$PROJECT_DIR/$MAIN_REL"
+BUILDSYS_DIR="$(cd -- "$(dirname -- "$MAIN_PATH")" && pwd)"
+VENV_DIR="$BUILDSYS_DIR/.venv"
+if [[ -d "$VENV_DIR" ]]; then
+    if [[ ! -f "$VENV_DIR/bin/activate" || ! -x "$VENV_DIR/bin/python" ]]; then
+        printf "error: incomplete buildsys virtual environment: %s\n" "$VENV_DIR" >&2
+        exit 1
+    fi
+    if [[ ! "${VIRTUAL_ENV:-}" -ef "$VENV_DIR" ]]; then
+        if ! source "$VENV_DIR/bin/activate"; then
+            printf "error: failed to activate buildsys virtual environment: %s\n" "$VENV_DIR" >&2
+            exit 1
+        fi
+    fi
+    exec "$VENV_DIR/bin/python" "$MAIN_PATH" --project "$PROJECT_DIR" "$@"
+fi
+exec python3 "$MAIN_PATH" --project "$PROJECT_DIR" "$@"

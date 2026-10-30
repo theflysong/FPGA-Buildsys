@@ -1,3 +1,13 @@
+namespace eval buildsys {}
+set ::buildsys::xpr $(xpr)
+set ::buildsys::stage $(stage)
+set ::buildsys::synthesis_run $(synthesis_run)
+set ::buildsys::implementation_run $(implementation_run)
+set ::buildsys::fileset $(fileset)
+set ::buildsys::hw_server $(hw_server)
+set ::buildsys::device_pattern $(device_pattern)
+set ::buildsys::bitstream_hint $(bitstream_hint)
+
 # All phases run within the existing project and retain their native outputs.
 namespace eval buildsys {
     variable project_open 0

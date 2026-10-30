@@ -10,7 +10,7 @@ import shutil
 
 from completion_candidates import TERMINALS
 from powershell_completion import install as install_powershell_completion
-from util import BUILDSYS_DIR, ConfigError, write_executable
+from util import BUILDSYS_DIR, ConfigError, write_template
 
 
 def install_wrappers(directory: Path) -> None:
@@ -19,67 +19,14 @@ def install_wrappers(directory: Path) -> None:
         raise ConfigError(f"{target}: install directory does not exist")
     main_relative = os.path.relpath(BUILDSYS_DIR / "main.py", target)
     shell_relative = main_relative.replace(os.sep, "/")
-    write_executable(target / "buildsys.sh", [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"',
-        f"MAIN_REL={shlex.quote(shell_relative)}",
-        'MAIN_PATH="$PROJECT_DIR/$MAIN_REL"',
-        'BUILDSYS_DIR="$(cd -- "$(dirname -- "$MAIN_PATH")" && pwd)"',
-        'VENV_DIR="$BUILDSYS_DIR/.venv"',
-        'if [[ -d "$VENV_DIR" ]]; then',
-        '    if [[ ! -f "$VENV_DIR/bin/activate" || ! -x "$VENV_DIR/bin/python" ]]; then',
-        '        printf "error: incomplete buildsys virtual environment: %s\\n" "$VENV_DIR" >&2',
-        '        exit 1',
-        '    fi',
-        '    if [[ ! "${VIRTUAL_ENV:-}" -ef "$VENV_DIR" ]]; then',
-        '        if ! source "$VENV_DIR/bin/activate"; then',
-        '            printf "error: failed to activate buildsys virtual environment: %s\\n" "$VENV_DIR" >&2',
-        '            exit 1',
-        '        fi',
-        '    fi',
-        '    exec "$VENV_DIR/bin/python" "$MAIN_PATH" --project "$PROJECT_DIR" "$@"',
-        'fi',
-        'exec python3 "$MAIN_PATH" --project "$PROJECT_DIR" "$@"',
-    ])
-    write_executable(target / "buildsys", [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"',
-        'exec "$SCRIPT_DIR/buildsys.sh" "$@"',
-    ])
+    write_template(target / "buildsys.sh", "buildsys.sh.in", executable=True,
+                   main_relative=shlex.quote(shell_relative))
+    write_template(target / "buildsys", "buildsys.in", executable=True)
     # Batch expands literal percent signs even inside double quotes. Disable
     # delayed expansion so exclamation marks in project paths survive as well.
     batch_relative = main_relative.replace("/", "\\").replace("%", "%%")
-    (target / "buildsys.bat").write_bytes((
-        "@echo off\r\n"
-        "setlocal DisableDelayedExpansion\r\n"
-        # Use the wrapper's short path for internal batch-to-batch calls. This
-        # prevents a literal percent sign in an installation path from being
-        # treated as an environment-variable expansion by CALL.
-        f'for %%I in ("%~sdp0{batch_relative}") do set "BUILDSYS_DIR=%%~dpI"\r\n'
-        'set "BUILDSYS_VENV=%BUILDSYS_DIR%.venv"\r\n'
-        'if not exist "%BUILDSYS_VENV%\\" goto system_python\r\n'
-        'if not exist "%BUILDSYS_VENV%\\Scripts\\activate.bat" goto incomplete_venv\r\n'
-        'if not exist "%BUILDSYS_VENV%\\Scripts\\python.exe" goto incomplete_venv\r\n'
-        # Compare absolute short paths to handle long/short spellings, case,
-        # relative paths and trailing separators without invoking Python.
-        'if defined VIRTUAL_ENV for %%I in ("%VIRTUAL_ENV%\\.") do for %%J in ("%BUILDSYS_VENV%\\.") do if /i "%%~fsI"=="%%~fsJ" goto venv_python\r\n'
-        'call "%BUILDSYS_VENV%\\Scripts\\activate.bat"\r\n'
-        'if errorlevel 1 goto activation_failed\r\n'
-        ":venv_python\r\n"
-        f'"%BUILDSYS_VENV%\\Scripts\\python.exe" "%~dp0{batch_relative}" --project "%~dp0." %*\r\n'
-        "exit /b %errorlevel%\r\n"
-        ":incomplete_venv\r\n"
-        'echo error: incomplete buildsys virtual environment: "%BUILDSYS_VENV%" >&2\r\n'
-        "exit /b 1\r\n"
-        ":activation_failed\r\n"
-        'echo error: failed to activate buildsys virtual environment: "%BUILDSYS_VENV%" >&2\r\n'
-        "exit /b 1\r\n"
-        ":system_python\r\n"
-        f'python "%~dp0{batch_relative}" --project "%~dp0." %*\r\n'
-        "exit /b %errorlevel%\r\n"
-    ).encode("utf-8"))
+    write_template(target / "buildsys.bat", "buildsys.bat.in", newline="\r\n",
+                   main_relative=batch_relative)
     print(f"installed {target / 'buildsys'}, {target / 'buildsys.sh'} and {target / 'buildsys.bat'}")
 
 

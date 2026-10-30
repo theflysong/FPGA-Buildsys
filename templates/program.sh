@@ -1,4 +1,6 @@
-# Appended to the generated program header, which defines PROGRAM_ID and BITSTREAM.
+$(header)
+PROGRAM_ID=$(program_id)
+BITSTREAM=$(bitstream)
 usage() {
   printf '%s\n' 'Usage: program.sh --protocol <cable> [--busdev-num <bus:device> | --ftdi-serial <serial>]' >&2
   exit 2

@@ -8,30 +8,20 @@ import shlex
 from models import Project, Simulation
 from util import (
     add_target_argument as add_arguments, execute_job, relative,
-    task_header, write_executable,
+    task_header, write_template,
     require_simulation as validate,
 )
 
 
 def generate_script(project: Project, simulation: Simulation) -> None:
     job_dir = project.job_dir(simulation)
-    header = task_header(project)
     filelist = relative(project, project.filelist(simulation))
     vvp_file = relative(project, simulation.vvp)
     vcd_file = relative(project, simulation.vcd)
-    build_lines = [
-        *header,
-        f"filelist={shlex.quote(filelist)}",
-        f"vvp_file={shlex.quote(vvp_file)}",
-        f"vcd_file={shlex.quote(vcd_file)}",
-        'if [[ ! -f "$filelist" ]]; then',
-        '  printf "Missing %s; run the Python auxiliary command first.\\n" "$filelist" >&2',
-        '  exit 2',
-        'fi',
-        'mkdir -p -- "$(dirname -- "$vvp_file")" "$(dirname -- "$vcd_file")"',
-        f'iverilog -g2012 -Wall -s {shlex.quote(simulation.top)} -f "$filelist" "-D__VCD_FILE__=\\\"$vcd_file\\\"" -o "$vvp_file"',
-    ]
-    write_executable(job_dir / "build.sh", build_lines)
+    write_template(job_dir / "build.sh", "build.sh", executable=True,
+                   header="\n".join(task_header(project)), filelist=shlex.quote(filelist),
+                   vvp_file=shlex.quote(vvp_file), vcd_file=shlex.quote(vcd_file),
+                   top=shlex.quote(simulation.top))
 
 
 def execute(project: Project, target_id: str | None,

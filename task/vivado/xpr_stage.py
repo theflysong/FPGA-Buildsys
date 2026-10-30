@@ -12,11 +12,10 @@ import sys
 
 from models import Project, XprSimulation, XprStageTarget
 from .xpr import tcl_word
-from util import ConfigError
+from util import ConfigError, write_template
 
 
 ERROR_LINE = re.compile(r"^\s*(?:ERROR|FATAL)(?:\s*:|\s+\[)", re.IGNORECASE)
-TCL_HELPER = Path(__file__).with_name("vivado_xpr.tcl")
 
 
 def _environment() -> dict[str, str]:
@@ -80,11 +79,8 @@ def run_stage(target: XprStageTarget, stage: str, *, simulation: XprSimulation |
         "hw_server": hw_server, "device_pattern": device,
         "bitstream_hint": f"run buildsys xpr-bitstream {target.xpr_id} first",
     }
-    script.write_text(
-        "namespace eval buildsys {}\n" +
-        "".join(f"set ::buildsys::{key} {tcl_word(value)}\n" for key, value in variables.items()) +
-        TCL_HELPER.read_text(encoding="utf-8"), encoding="utf-8",
-    )
+    write_template(script, "vivado/xpr-stage.tcl",
+                   **{key: tcl_word(value) for key, value in variables.items()})
     command = [executable, "-mode", "batch", "-notrace", "-source", str(script),
                "-log", str(log), "-journal", str(journal)]
     # Popen resolves native .bat launchers on Windows without another shell

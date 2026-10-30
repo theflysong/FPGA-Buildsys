@@ -10,38 +10,31 @@ import tempfile
 from models import Project
 from util import (
     add_optional_target_argument as add_arguments, execute_job, relative,
-    selected_targets, selected_targets as validate, task_header, write_executable,
+    render_template, selected_targets, selected_targets as validate, task_header, write_executable,
 )
 
 
 def cleanup_script(project: Project, target_id: str | None, *, dist: bool,
                    temporary: bool = False) -> list[str]:
-    lines = task_header(project, temporary=temporary)
-    if temporary:
-        lines.append("trap 'rm -f -- \"$0\"' EXIT")
-        lines.append('[[ "$(stat -f -c %T /dev/shm)" == tmpfs ]] || { printf "Logs and temporary scripts require tmpfs at /dev/shm.\\n" >&2; exit 2; }')
-    # Parse the complete function before executing it: cleandist can remove
-    # this script and its directory without depending on later file reads.
-    lines.append("cleanup() {")
-    for target in selected_targets(project, target_id):
-        lines.append("  rm -f -- " + " ".join(shlex.quote(relative(project, path)) for path in target.outputs))
+    def remove(*paths: Path, recursive: bool = False) -> str:
+        return render_template("shell/remove.sh", flags="-rf" if recursive else "-f",
+                               paths=" ".join(shlex.quote(relative(project, path)) for path in paths))
+
+    outputs = "".join(remove(*target.outputs) for target in selected_targets(project, target_id))
+    generated = ""
     if dist:
         if target_id is None:
-            lines.extend([
-                f"  rm -rf -- {shlex.quote(relative(project, project.auxiliary_dir))}",
-                f"  rm -rf -- {shlex.quote(relative(project, project.model_dir))}",
-                f"  rm -rf -- {shlex.quote(relative(project, project.symbol_dir))}",
-                f"  rm -f -- {shlex.quote(relative(project, project.script))}",
-                "  rm -rf -- build/jobs",
-            ])
+            generated = "".join(remove(path, recursive=True) for path in (
+                project.auxiliary_dir, project.model_dir, project.symbol_dir,
+            )) + remove(project.script) + remove(project.root / "build/jobs", recursive=True)
         else:
             target = selected_targets(project, target_id)[0]
-            lines.extend([
-                f"  rm -f -- {shlex.quote(relative(project, target.auxiliary))}",
-                f"  rm -rf -- {shlex.quote(relative(project, project.job_dir(target)))}",
-            ])
-    lines.extend(["}", "cleanup"])
-    return lines
+            generated = remove(target.auxiliary) + remove(project.job_dir(target), recursive=True)
+    return render_template(
+        "cleanup.sh", header="\n".join(task_header(project, temporary=temporary)),
+        temporary_header=render_template("shell/temporary-cleanup.sh").rstrip("\n") if temporary else "",
+        remove_outputs=outputs.rstrip("\n"), remove_generated=generated.rstrip("\n"),
+    ).splitlines()
 
 
 def generate_cleanup_script(project: Project, target_id: str | None, *, dist: bool) -> Path:

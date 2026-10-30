@@ -15,6 +15,19 @@
 
 `init-venv` 会在 `main.py` 所在的 buildsys 目录创建 `.venv/`, 并在其中安装 `requirements.txt` 的 `pytcl-eda`. 之后 `buildsys`、`buildsys.sh` 和 `buildsys.bat` 检测到该环境时会使用其中的 Python；如果 `VIRTUAL_ENV` 已指向同一个环境，则跳过重复激活，否则先激活该环境。没有该目录时仍使用系统 Python。已有项目可重新运行 `install` 更新入口脚本。
 
+## 脚本模板
+
+入口、dispatcher、仿真、清理、Yosys 构建和 Vivado Tcl 脚本从 `templates/` 渲染。
+`buildsys.in`、`buildsys.sh.in`、`buildsys.bat.in` 对应安装入口，`dispatcher.sh` 对应 `jobs.sh`；
+`shell/` 存放共享片段，`yosys/`、`vivado/` 和 `powershell/` 存放各工具的模板。
+
+使用 `$(arg_name)` 引入参数，由 `util.render_template()` 做一次字面替换。
+参数值不会递归展开，缺少参数会报告模板路径和参数名。Python 调用方负责 shell、批处理或 Tcl 的转义；
+模板不自动转义，也不执行表达式。普通 `$(dirname -- "$0")` 等命令替换保持不变；
+与参数语法相同的无参数命令应写为 `$$(pwd)`，生成时还原为 `$(pwd)`。
+Shell 和 Tcl 输出使用 LF，批处理输出使用 CRLF，shell 入口和任务脚本保留可执行权限。
+修改模板后重新运行 `install`、`script` 或相应阶段命令更新生成文件。
+
 ## 运行示例
 
 先为项目选择工具链, 选择会保存到项目根目录的 `.buildsys/toolchain.json`:

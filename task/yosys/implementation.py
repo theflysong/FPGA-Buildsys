@@ -7,31 +7,28 @@ import shlex
 
 from models import ImplementationProgram, Project
 from util import (
-    TMPFS_CHECK, add_target_argument as add_arguments,
-    execute_job, program_header, relative, write_executable,
+    add_target_argument as add_arguments,
+    execute_job, program_header, relative, render_template, write_template,
     require_fpga_build as validate,
 )
 
 
 def generate_script(project: Project, program: ImplementationProgram) -> None:
     job_dir = project.job_dir(program)
-    header = program_header(project, program)
     synthesis = relative(project, program.synthesis)
     implementation = relative(project, program.implementation)
     constraints = relative(project, program.constraints)
-    write_executable(job_dir / "implementation.sh", [
-        *header,
-        f'"$PROJECT_ROOT/{relative(project, job_dir / "synthesis.sh")}"',
-        'command -v nextpnr-himbaechel >/dev/null || { printf "Missing tool: nextpnr-himbaechel\\n" >&2; exit 127; }',
-        f"mkdir -p -- {shlex.quote(relative(project, program.implementation.parent))}",
-        TMPFS_CHECK,
-        f'log_dir=$(mktemp -d -- /dev/shm/buildsys-{project.identifier}-{program.identifier}-implementation-XXXXXX)',
-        f'impl_log="$log_dir/{program.identifier}.implementation.log"',
-        'printf "Implementation log: %s\\n" "$impl_log" >&2',
-        f"nextpnr-himbaechel --device \"$FPGA_PART\" --json {shlex.quote(synthesis)} "
-        f"-o {shlex.quote('xdc=' + constraints)} -o {shlex.quote('fasm=' + implementation)} "
-        '--log "$impl_log"',
-    ])
+    write_template(
+        job_dir / "implementation.sh", "yosys/implementation.sh", executable=True,
+        header="\n".join(program_header(project, program)),
+        synthesis_script=shlex.quote(relative(project, job_dir / "synthesis.sh")),
+        output_directory=shlex.quote(relative(project, program.implementation.parent)),
+        tmpfs_check=render_template("shell/tmpfs-check.sh").rstrip("\n"),
+        log_directory=shlex.quote(f"/dev/shm/buildsys-{project.identifier}-{program.identifier}-implementation-XXXXXX"),
+        program_id=program.identifier, synthesis=shlex.quote(synthesis),
+        constraints_option=shlex.quote("xdc=" + constraints),
+        implementation_option=shlex.quote("fasm=" + implementation),
+    )
 
 
 def execute(project: Project, target_id: str | None,

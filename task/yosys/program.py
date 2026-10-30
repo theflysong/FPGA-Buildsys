@@ -8,7 +8,7 @@ import shlex
 
 from models import ProgrammingTarget, Project
 from util import (
-    BUILDSYS_DIR, execute_job, relative, task_header, toolchain_header, write_executable,
+    execute_job, relative, task_header, toolchain_header, write_template,
     selected_toolchain_header,
     require_program as validate,
 )
@@ -19,13 +19,9 @@ def generate_script(project: Project, program: ProgrammingTarget) -> None:
     header = [*task_header(project), *selected_toolchain_header("yosys"),
               *toolchain_header(program.toolchain_roots)]
     bitstream = relative(project, program.bitstream)
-    programming = BUILDSYS_DIR / "templates" / "program.sh"
-    write_executable(job_dir / "program.sh", [
-        *header,
-        f"PROGRAM_ID={shlex.quote(program.identifier)}",
-        f"BITSTREAM={shlex.quote(bitstream)}",
-        *programming.read_text(encoding="utf-8").splitlines(),
-    ])
+    write_template(job_dir / "program.sh", "program.sh", executable=True,
+                   header="\n".join(header), program_id=shlex.quote(program.identifier),
+                   bitstream=shlex.quote(bitstream))
 
 
 def execute(project: Project, target_id: str | None,

@@ -8,20 +8,18 @@ import shlex
 from models import Project, Simulation
 from util import (
     add_target_argument as add_arguments, execute_job, relative,
-    task_header, write_executable,
+    task_header, write_template,
     require_simulation as validate,
 )
 
 
 def generate_script(project: Project, simulation: Simulation) -> None:
     job_dir = project.job_dir(simulation)
-    header = task_header(project)
     vvp_file = relative(project, simulation.vvp)
-    write_executable(job_dir / "simulate.sh", [
-        *header,
-        f'"$PROJECT_ROOT/{relative(project, job_dir / "build.sh")}"',
-        f"vvp -N {shlex.quote(vvp_file)}",
-    ])
+    write_template(job_dir / "simulate.sh", "simulate.sh", executable=True,
+                   header="\n".join(task_header(project)),
+                   build_script=shlex.quote(relative(project, job_dir / "build.sh")),
+                   vvp_file=shlex.quote(vvp_file))
 
 
 def execute(project: Project, target_id: str | None,

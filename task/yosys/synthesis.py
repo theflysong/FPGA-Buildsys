@@ -7,35 +7,26 @@ import shlex
 
 from models import Project, SynthesisProgram
 from util import (
-    BUILDSYS_DIR, TMPFS_CHECK, add_target_argument as add_arguments,
-    execute_job, program_header, relative, write_executable,
+    BUILDSYS_DIR, add_target_argument as add_arguments,
+    execute_job, program_header, relative, render_template, write_template,
     require_fpga_build as validate,
 )
 
 
 def generate_script(project: Project, program: SynthesisProgram) -> None:
     job_dir = project.job_dir(program)
-    header = program_header(project, program)
     synthesis = relative(project, program.synthesis)
     yosys_script = relative(project, project.yosys_script(program))
     json_compactor = str(BUILDSYS_DIR / "compact_json.py")
-    write_executable(job_dir / "synthesis.sh", [
-        *header,
-        f"yosys_script={shlex.quote(yosys_script)}",
-        '[[ -f "$yosys_script" ]] || { printf "Missing %s; run the Python auxiliary command first.\\n" "$yosys_script" >&2; exit 2; }',
-        'command -v yosys >/dev/null || { printf "Missing tool: yosys\\n" >&2; exit 127; }',
-        f"mkdir -p -- {shlex.quote(relative(project, program.synthesis.parent))}",
-        TMPFS_CHECK,
-        f'log_dir=$(mktemp -d -- /dev/shm/buildsys-{project.identifier}-{program.identifier}-synthesis-XXXXXX)',
-        f'synth_log="$log_dir/{program.identifier}.synthesis.log"',
-        'printf "Synthesis log: %s\\n" "$synth_log" >&2',
-        f"json_compactor={shlex.quote(json_compactor)}",
-        'if ! yosys -Q -q -l "$synth_log" -s "$yosys_script" | python3 "$json_compactor" '
-        + shlex.quote(synthesis) + '; then',
-        f"  rm -f -- {shlex.quote(synthesis)}",
-        '  exit 1',
-        'fi',
-    ])
+    write_template(
+        job_dir / "synthesis.sh", "yosys/synthesis.sh", executable=True,
+        header="\n".join(program_header(project, program)), yosys_script=shlex.quote(yosys_script),
+        output_directory=shlex.quote(relative(project, program.synthesis.parent)),
+        tmpfs_check=render_template("shell/tmpfs-check.sh").rstrip("\n"),
+        log_directory=shlex.quote(f"/dev/shm/buildsys-{project.identifier}-{program.identifier}-synthesis-XXXXXX"),
+        program_id=program.identifier, json_compactor=shlex.quote(json_compactor),
+        synthesis=shlex.quote(synthesis),
+    )
 
 
 def execute(project: Project, target_id: str | None,
