@@ -20,6 +20,7 @@ sys.path.insert(0, str(BUILDSYS_DIR))
 
 import main as buildsys_entry
 from task import install as installation_task
+from toolchains import select_toolchain, selection_path
 
 
 ENTRY = BUILDSYS_DIR / "main.py"
@@ -101,6 +102,7 @@ class CompletionTests(unittest.TestCase):
             "bitstream", "program", "xpr", "xpr-simulation", "xpr-synthesis", "xpr-implementation",
             "xpr-bitstream", "xpr-program", "clean", "cleandist", "init", "init-venv", "install", "completion",
             "toolchain",
+            "yosys-synthesis", "yosys-implementation", "yosys-bitstream", "yosys-program",
         })
         self.assertEqual(self.query("sim"), ["simulate"])
         self.assertEqual(self.query("ini"), ["init", "init-venv"])
@@ -123,7 +125,8 @@ class CompletionTests(unittest.TestCase):
     def test_context_ids_and_live_file_changes(self) -> None:
         for command in ("build", "simulate"):
             self.assertEqual(self.query(command, ""), ["demo", "tb_other"])
-        for command in ("synthesis", "implementation", "bitstream", "program"):
+        for command in ("synthesis", "implementation", "bitstream", "program",
+                        "yosys-synthesis", "yosys-implementation", "yosys-bitstream", "yosys-program"):
             self.assertEqual(self.query(command, ""), ["coreprog"])
         self.assertEqual(self.query("xpr", ""), [])
         for command in ("clean", "cleandist"):
@@ -139,6 +142,23 @@ class CompletionTests(unittest.TestCase):
         # Stale files with matching stems must not create duplicate clean candidates.
         (self.auxiliary / "new.ys").touch()
         self.assertEqual(self.query("clean", "").count("new"), 1)
+
+    def test_shared_stage_completion_follows_selection_without_generating(self) -> None:
+        (self.root / "configuration.toml").write_text(
+            '[[project]]\nid = "design"\n[[xpr]]\nid = "export"\n'
+        )
+        for toolchain, expected in (("yosys", ["coreprog", "design"]), ("vivado", ["export"])):
+            select_toolchain(self.root, toolchain)
+            before = selection_path(self.root).read_bytes()
+            for stage in ("synthesis", "implementation", "bitstream", "program"):
+                self.assertEqual(self.query(stage, ""), expected)
+                self.assertEqual(self.query("yosys-" + stage, ""), ["coreprog", "design"])
+            options = (["--protocol", "--busdev-num", "--ftdi-serial"] if toolchain == "yosys"
+                       else ["--hw-server", "--device"])
+            self.assertEqual(self.query("program", expected[0], ""), options)
+            self.assertEqual(selection_path(self.root).read_bytes(), before)
+        selection_path(self.root).write_text("invalid JSON [")
+        self.assertEqual(self.query("implementation", ""), ["coreprog", "design"])
 
     def test_first_ids_without_auxiliary_or_local_fpga_settings(self) -> None:
         shutil.rmtree(self.root / "build")

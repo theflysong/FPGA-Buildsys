@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from models import Project
+from toolchains import resolve_command
 from task import COMMANDS
 from task.auxiliary import generate_auxiliary
 from task.configure import configure
@@ -20,12 +21,12 @@ class Planner:
         "script": ("configure", "model", "auxiliary generation", "script generation"),
         "build": ("configure", "model", "auxiliary generation", "script generation", "script execution"),
         "simulate": ("configure", "model", "auxiliary generation", "script generation", "script execution"),
-        "synthesis": ("configure", "model", "auxiliary generation", "script generation", "script execution"),
-        "implementation": ("configure", "model", "auxiliary generation", "script generation", "script execution"),
-        "bitstream": ("configure", "model", "auxiliary generation", "script generation", "script execution"),
+        "yosys-synthesis": ("configure", "model", "auxiliary generation", "script generation", "script execution"),
+        "yosys-implementation": ("configure", "model", "auxiliary generation", "script generation", "script execution"),
+        "yosys-bitstream": ("configure", "model", "auxiliary generation", "script generation", "script execution"),
         "clean": ("configure", "script generation", "script execution"),
         "cleandist": ("configure", "script generation", "script execution"),
-        "program": ("configure", "script generation", "script execution"),
+        "yosys-program": ("configure", "script generation", "script execution"),
         "xpr": ("configure", "model", "xpr generation"),
         "xpr-simulation": ("configure", "xpr stage execution"),
         "xpr-synthesis": ("configure", "xpr stage execution"),
@@ -36,6 +37,8 @@ class Planner:
 
     def run(self, root: Path, command: str, target_id: str | None = None,
             task_args: tuple[str, ...] = ()) -> None:
+        root = root.expanduser().resolve()
+        command = resolve_command(root, command)
         workflow = COMMANDS[command]
         project: Project | None = None
         temporary_script: Path | None = None

@@ -10,25 +10,44 @@ import sys
 
 from planner import Planner
 from task import COMMANDS
+from toolchains import STAGES, resolve_command
 from util import ConfigError
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # Resolve before parsing stage options: each backend has its own program flags.
+    probe = argparse.ArgumentParser(add_help=False)
+    probe.add_argument("--project", type=Path)
+    probe.add_argument("command", nargs="?")
+    preliminary, _ = probe.parse_known_args(argv)
+    workflows = dict(COMMANDS)
+    if preliminary.command in STAGES and preliminary.project is not None:
+        try:
+            command = resolve_command(preliminary.project.expanduser().resolve(), preliminary.command)
+            workflows[preliminary.command] = COMMANDS[command]
+        except (ConfigError, OSError) as exc:
+            if not any(option in argv for option in ("-h", "--help")):
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", type=Path, help="directory containing configuration.toml")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command, workflow in COMMANDS.items():
-        command_parser = subparsers.add_parser(command, help=workflow.__doc__)
+    for command, workflow in workflows.items():
+        help_text = (f"Run {command} using the selected toolchain."
+                     if command in STAGES else workflow.__doc__)
+        command_parser = subparsers.add_parser(command, help=help_text)
         if hasattr(workflow, "add_arguments"):
             workflow.add_arguments(command_parser)
     arguments = parser.parse_args(argv)
-    workflow = COMMANDS[arguments.command]
-    if arguments.command in Planner.TASKS and arguments.project is None:
+    workflow = workflows[arguments.command]
+    project_command = arguments.command in Planner.TASKS or arguments.command in STAGES
+    if project_command and arguments.project is None:
         parser.error("--project is required for project commands")
     if hasattr(workflow, "validate_arguments"):
         workflow.validate_arguments(arguments, parser)
     try:
-        if arguments.command in Planner.TASKS:
+        if project_command:
             task_args = workflow.script_arguments(arguments) if hasattr(workflow, "script_arguments") else ()
             Planner().run(arguments.project, arguments.command,
                           getattr(arguments, "target_id", None), task_args)

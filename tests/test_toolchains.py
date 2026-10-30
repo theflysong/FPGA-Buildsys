@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import json
+import contextlib
+import io
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from main import main
 from task import COMMANDS
 from task.configure import configure
 from task.install import install_wrappers
-from toolchains import select_toolchain, selected_toolchain, selection_path
+from toolchains import STAGES, select_toolchain, selected_toolchain, selection_path
 
 
 ENTRY = Path(__file__).resolve().parents[1] / "main.py"
@@ -94,6 +98,8 @@ simulations = ["test"]
             ("toolchain",), ("auxiliary",), ("script",), ("synthesis", "core"),
             ("implementation", "core"), ("bitstream", "core"),
             ("program", "core", "--protocol", "ft2232"), ("xpr", "export"),
+            *((f"yosys-{stage}", "core") for stage in STAGES if stage != "program"),
+            ("yosys-program", "core", "--protocol", "ft2232"),
             *((f"xpr-{stage}", "export") for stage in (
                 "simulation", "synthesis", "implementation", "bitstream", "program",
             )),
@@ -134,8 +140,8 @@ simulations = ["test"]
         for name, arguments, expected in (
             ("yosys", ("xpr", "export"), "vivado"),
             ("yosys", ("xpr-synthesis", "export"), "vivado"),
-            ("vivado", ("synthesis", "core"), "yosys"),
-            ("vivado", ("program", "core", "--protocol", "ft2232"), "yosys"),
+            ("vivado", ("yosys-synthesis", "core"), "yosys"),
+            ("vivado", ("yosys-program", "core", "--protocol", "ft2232"), "yosys"),
         ):
             with self.subTest(name=name, arguments=arguments):
                 select_toolchain(self.root, name)
@@ -217,7 +223,7 @@ simulations = ["test"]
                 select_toolchain(self.root, name)
             else:
                 selection_path(self.root).unlink()
-            for command in ([str(self.root / "jobs.sh"), "synthesis", "core"],
+            for command in ([str(self.root / "jobs.sh"), "yosys-synthesis", "core"],
                             [str(self.root / "build/jobs/core/synthesis.sh")],
                             [str(self.root / "build/jobs/core/program.sh"), "--protocol", "ft2232"]):
                 with self.subTest(name=name, command=command):
@@ -257,10 +263,56 @@ simulations = ["test"]
         self.assertFalse((self.root / "jobs.sh").exists())
 
     def test_backend_commands_use_their_own_packages(self) -> None:
-        for command in ("synthesis", "implementation", "bitstream", "program"):
+        for command in (f"yosys-{stage}" for stage in STAGES):
             self.assertTrue(COMMANDS[command].__name__.startswith("task.yosys."))
         for command in ("xpr", "xpr-simulation", "xpr-synthesis", "xpr-implementation", "xpr-bitstream", "xpr-program"):
             self.assertTrue(COMMANDS[command].__name__.startswith("task.vivado."))
+
+    def test_yosys_shared_and_explicit_stages_generate_and_execute_the_same_jobs(self) -> None:
+        select_toolchain(self.root, "yosys")
+        local = self.root / "build/fpga/board.toml"
+        local.parent.mkdir(parents=True)
+        local.write_text('xray-database = "database"\nPYTHONPATH = ["src"]\n')
+        for stage in STAGES:
+            for command in (stage, f"yosys-{stage}"):
+                with self.subTest(command=command), \
+                        patch(f"task.yosys.{stage}.execute_job") as execute, \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    options = ["--protocol", "ft2232"] if stage == "program" else []
+                    self.assertEqual(main(["--project", str(self.root), command, "core", *options]), 0)
+                    project, actual_stage, target, task_args, _ = execute.call_args.args
+                    self.assertEqual((project.command, actual_stage, target),
+                                     (f"yosys-{stage}", stage, "core"))
+                    self.assertEqual(task_args, tuple(options))
+                    self.assertTrue((self.root / f"build/jobs/core/{stage}.sh").is_file())
+
+    def test_program_options_and_help_follow_selected_toolchain(self) -> None:
+        for name, required, rejected in (
+            ("yosys", "--protocol", "--hw-server"),
+            ("vivado", "--hw-server", "--protocol"),
+        ):
+            select_toolchain(self.root, name)
+            result = self.cli("program", "--help")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(required, result.stdout)
+            self.assertNotIn(rejected, result.stdout)
+        select_toolchain(self.root, "yosys")
+        result = self.cli("program", "core")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--protocol", result.stderr)
+        for name, options in (("yosys", ("--protocol", "ft2232", "--device", "xc7*")),
+                              ("vivado", ("--protocol", "ft2232"))):
+            select_toolchain(self.root, name)
+            result = self.cli("program", "core", *options)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("unrecognized arguments", result.stderr)
+        self.assertFalse((self.root / "build").exists())
+
+    def test_stage_help_is_available_without_selection(self) -> None:
+        for command in (*STAGES, *(f"yosys-{stage}" for stage in STAGES)):
+            result = self.cli(command, "--help")
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(selection_path(self.root).exists())
 
 
 if __name__ == "__main__":

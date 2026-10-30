@@ -6,11 +6,14 @@ import os
 from pathlib import Path
 
 from completion_ids import ID_RE, candidate_ids, xpr_simulation_ids
+from toolchains import STAGES, YOSYS_COMMANDS, resolve_command
+from util import ConfigError
 
 
 COMMANDS = (
     "model", "auxiliary", "script", "build", "simulate", "synthesis", "implementation",
     "bitstream", "program", "xpr", "xpr-simulation", "xpr-synthesis", "xpr-implementation",
+    "yosys-synthesis", "yosys-implementation", "yosys-bitstream", "yosys-program",
     "xpr-bitstream", "xpr-program", "clean", "cleandist", "init", "init-venv", "install",
     "completion", "toolchain",
 )
@@ -108,19 +111,25 @@ def candidates(root: Path, words: list[str]) -> list[str]:
     words = words or [""]
     position = len(words) - 1
     command, prefix = words[0], words[-1]
+    if position > 0 and command in STAGES:
+        try:
+            command = resolve_command(root, command)
+        except (ConfigError, OSError):
+            # Preserve useful completion before a toolchain has been selected.
+            command = "yosys-" + command
     result: list[str] = []
     if position == 0:
         result = list(COMMANDS)
     elif command == "install":
         result = install_candidates(words)
-    elif command in {"program", "xpr-program"}:
+    elif command in {"yosys-program", "xpr-program"}:
         result = program_candidates(root, words, xpr=command == "xpr-program")
     elif position == 1:
         if command == "toolchain":
             result = ["yosys", "vivado"]
         elif command in {"build", "simulate"}:
             result = target_ids(root, ".f")
-        elif command in {"synthesis", "implementation", "bitstream"}:
+        elif command in YOSYS_COMMANDS:
             result = target_ids(root, ".ys")
         elif command in {"clean", "cleandist"}:
             result = target_ids(root, ".f", ".ys")

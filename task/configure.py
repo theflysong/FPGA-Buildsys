@@ -9,7 +9,7 @@ from models import (
     CleanupTarget, Fpga, ImplementationProgram, Program, ProgrammingTarget,
     Project, Simulation, SynthesisProgram,
 )
-from toolchains import command_toolchain
+from toolchains import command_toolchain, resolve_command
 from util import (
     ConfigError, ID_RE, SYMBOL_RE, TIMESCALE_RE, fpga_config_path,
     output_directory, output_name, project_path, read_toml, required_string,
@@ -92,11 +92,13 @@ def constraint_path(root: Path, directories: dict, config_path: Path,
 
 def configure(root: Path, command: str = "script", target_id: str | None = None) -> Project:
     root = root.expanduser().resolve()
+    command = resolve_command(root, command)
     toolchain = command_toolchain(root, command)
     return replace(_configure(root, command, target_id, toolchain), toolchain=toolchain)
 
 
 def _configure(root: Path, command: str, target_id: str | None, toolchain: str | None) -> Project:
+    stage = command.removeprefix("yosys-")
     config_path = root / "configuration.toml"
     data = read_toml(config_path)
     identifier = required_string(data, "id", str(config_path), ID_RE)
@@ -183,7 +185,7 @@ def _configure(root: Path, command: str, target_id: str | None, toolchain: str |
             continue
 
         fpga_id = required_string(raw, "fpga", location, ID_RE)
-        if command == "program":
+        if stage == "program":
             if fpga_id not in raw_fpgas:
                 raise ConfigError(f"{location}: unknown fpga id {fpga_id!r}")
             bitstream = output(raw, "bitstream", location)
@@ -195,14 +197,14 @@ def _configure(root: Path, command: str, target_id: str | None, toolchain: str |
         fpga = public_fpga(fpga_id, location)
         top = required_string(raw, "top-symbol", location, SYMBOL_RE)
         synthesis = output(raw, "synthesis", location)
-        if command == "synthesis":
+        if stage == "synthesis":
             programs.append(SynthesisProgram(task_id, fpga, top, synthesis))
             continue
         implementation = output(raw, "implementation", location)
         constraints = constraint_path(root, directories, config_path, raw, location)
         if constraints in seen_outputs:
             raise ConfigError(f"{location}: duplicate output {constraints}")
-        if command == "implementation":
+        if stage == "implementation":
             programs.append(ImplementationProgram(task_id, fpga, top, synthesis, implementation, constraints))
             continue
         bitstream = output(raw, "bitstream", location)
@@ -214,7 +216,7 @@ def _configure(root: Path, command: str, target_id: str | None, toolchain: str |
         cleanup_targets.append(CleanupTarget(task_id, (synthesis, implementation, frames, bitstream),
                                              root / "build/auxiliary" / f"{task_id}.ys"))
 
-    needs_sources = not cleaning and command != "program"
+    needs_sources = not cleaning and stage != "program"
     return Project(
         root, identifier, tuple(simulations), tuple(programs),
         command=command,

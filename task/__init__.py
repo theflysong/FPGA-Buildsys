@@ -1,5 +1,7 @@
 """Command workflows registered by the CLI and scheduled by the planner."""
 
+from toolchains import STAGE_COMMANDS
+
 from . import (auxiliary, build, clean, cleandist, completion, init, init_venv,
                install, model, script, simulate, toolchain, vivado, yosys)
 
@@ -11,3 +13,5 @@ COMMANDS = {module.__name__.rsplit(".", 1)[-1]: module for module in (
 COMMANDS["init-venv"] = init_venv
 COMMANDS.update(yosys.COMMANDS)
 COMMANDS.update(vivado.COMMANDS)
+# Shared commands use Yosys argument definitions until the CLI resolves a backend.
+COMMANDS.update({stage: COMMANDS[command] for stage, command in STAGE_COMMANDS["yosys"].items()})

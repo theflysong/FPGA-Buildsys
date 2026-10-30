@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import shlex
+
 from models import Project
-from util import write_executable
+from util import BUILDSYS_DIR, write_executable
 from . import build, clean, cleandist, simulate
 
 
@@ -14,10 +16,21 @@ def generate_script(project: Project) -> None:
     dispatcher = [
         "#!/usr/bin/env bash", "set -euo pipefail",
         'PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"',
+        'cd "$PROJECT_ROOT"',
         "usage() {",
-        "  printf '%s\\n' 'Usage: jobs.sh <build|simulate|synthesis|implementation|bitstream> <id>' '       jobs.sh <clean|cleandist> [id]' '       jobs.sh program <id> --protocol <cable> [--busdev-num <bus:device> | --ftdi-serial <serial>]' >&2",
+        "  printf '%s\\n' 'Usage: jobs.sh <build|simulate> <simulation-id>' '       jobs.sh [yosys-]<synthesis|implementation|bitstream|program> <id> [options]' '       jobs.sh <clean|cleandist> [id]' 'FPGA stages use the selected toolchain; program options match buildsys program --help.' >&2",
         "  exit 2", "}",
         '[[ "$#" -ge 1 ]] || usage', 'command=$1', 'shift',
+        'case "$command" in',
+        '  synthesis|implementation|bitstream|program)',
+        f'    command=$(python3 {shlex.quote(str(BUILDSYS_DIR / "toolchains.py"))} . --resolve "$command")',
+        '    ;;', 'esac',
+        'case "$command" in',
+        '  xpr-synthesis|xpr-implementation|xpr-bitstream|xpr-program)',
+        f'    exec python3 {shlex.quote(str(BUILDSYS_DIR / "main.py"))} --project . "$command" "$@"',
+        '    ;;',
+        '  yosys-synthesis|yosys-implementation|yosys-bitstream|yosys-program) command=${command#yosys-} ;;',
+        'esac',
         'case "$command" in',
         '  clean|cleandist)',
         '    [[ "$#" -le 1 ]] || usage', '    target=${1:-_project}',

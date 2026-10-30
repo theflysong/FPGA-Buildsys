@@ -12,7 +12,12 @@ from util import ConfigError
 
 
 TOOLCHAINS = ("yosys", "vivado")
-YOSYS_COMMANDS = {"synthesis", "implementation", "bitstream", "program"}
+STAGES = ("synthesis", "implementation", "bitstream", "program")
+STAGE_COMMANDS = {
+    "yosys": {stage: f"yosys-{stage}" for stage in STAGES},
+    "vivado": {stage: f"xpr-{stage}" for stage in STAGES},
+}
+YOSYS_COMMANDS = set(STAGE_COMMANDS["yosys"].values())
 VIVADO_COMMANDS = {
     "xpr", "xpr-simulation", "xpr-synthesis", "xpr-implementation",
     "xpr-bitstream", "xpr-program",
@@ -65,6 +70,8 @@ def require_toolchain(root: Path, expected: str | None = None) -> str:
 
 
 def command_toolchain(root: Path, command: str) -> str | None:
+    if command in STAGES:
+        return require_toolchain(root)
     if command in YOSYS_COMMANDS:
         return require_toolchain(root, "yosys")
     if command in VIVADO_COMMANDS:
@@ -74,10 +81,20 @@ def command_toolchain(root: Path, command: str) -> str | None:
     return None
 
 
+def resolve_command(root: Path, command: str) -> str:
+    """Route shared FPGA stages to the project's selected backend."""
+    if command in STAGES:
+        return STAGE_COMMANDS[selected_toolchain(root)][command]
+    return command
+
+
 if __name__ == "__main__":
     # Generated FPGA jobs use the same validation when run without the CLI.
     try:
-        require_toolchain(Path(sys.argv[1]), sys.argv[2])
+        if len(sys.argv) == 4 and sys.argv[2] == "--resolve":
+            print(resolve_command(Path(sys.argv[1]), sys.argv[3]))
+        else:
+            require_toolchain(Path(sys.argv[1]), sys.argv[2])
     except (ConfigError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)

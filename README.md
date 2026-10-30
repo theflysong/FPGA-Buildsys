@@ -31,7 +31,19 @@
 选择不依赖 `configuration.toml`、已安装的 FPGA 工具或许可证。
 
 `auxiliary`、`script` 必须先选择任意一种工具链；
-`synthesis`、`implementation`、`bitstream`、`program` 必须选择 `yosys`；
+`synthesis`、`implementation`、`bitstream`、`program` 根据当前选择路由到对应工具链：
+
+| 通用命令 | `toolchain yosys` | `toolchain vivado` |
+| --- | --- | --- |
+| `synthesis` | `yosys-synthesis` | `xpr-synthesis` |
+| `implementation` | `yosys-implementation` | `xpr-implementation` |
+| `bitstream` | `yosys-bitstream` | `xpr-bitstream` |
+| `program` | `yosys-program` | `xpr-program` |
+
+Yosys 路由接收 `[[project]]` 的 id，Vivado 路由接收 `[[xpr]]` 的 id。
+`program` 的参数和帮助也按工具链切换：Yosys 必须指定 `--protocol`，可用 `--busdev-num` 或 `--ftdi-serial`；
+Vivado 使用 `--hw-server` 和 `--device`，默认 Hardware Server 为 `localhost:3121`。
+显式的 `yosys-*` 命令必须选择 `yosys`；
 `xpr` 和全部 `xpr-*` 命令必须选择 `vivado`。
 未选择、状态文件损坏或所选工具链不匹配时，在配置和生成文件之前返回错误，提示重新选择。
 `build`、`simulate`、`model`、`clean`、`cleandist`、`init`、`init-venv`、`install`、`completion` 及帮助不要求选择。
@@ -42,7 +54,9 @@
 
 专属任务分别位于 `task/yosys/` 和 `task/vivado/`，通用配置、源码模型、仿真和清理入口保留在 `task/`。
 选择 `yosys` 时，`auxiliary/script` 生成原有仿真及 FPGA 任务；选择 `vivado` 时，这两个命令只生成通用仿真任务，
-不要求 Yosys 的综合/实现/bitstream 配置，也不创建 FPGA 本地设置。Vivado 工程和阶段仍通过 `xpr` / `xpr-*` 显式执行。
+不要求 Yosys 的综合/实现/bitstream 配置，也不创建 FPGA 本地设置。Vivado 工程通过 `xpr` 导出，阶段可通过通用命令或 `xpr-*` 执行。
+重新运行 `script` 或阶段命令生成的 `jobs.sh` 同样支持通用阶段路由及 `yosys-*` 名称。
+直接执行已有的 `build/jobs/<id>/*.sh` 仍是对应的 Yosys 任务，并检查当前工具链。
 
 你可以通过 python3 脚本运行该构建系统, 如:
 
@@ -144,7 +158,9 @@ PowerShell 使用 `completion --json`, 从标准输入读取字符串数组并�
 
 仿真 id 合并 `build/auxiliary/*.f` 与 `configuration.toml` 中的 simulation id, 设计 id 合并 `build/auxiliary/*.ys` 与配置中的 project id, 并去重. `xpr` 命令仅补全 `[[xpr]]` 的 id. 配置中的 id 通过独立的 `completion_ids.py` 只读获取, 不要求目标的其他字段完整. 因此首次构建前、仅构建部分目标后、全项目 `cleandist` 后也能补全所有已配置目标. 删除或改名后仍可能补全旧辅助文件的 id, 可先清除旧辅助文件.
 
-`toolchain` 补全 `yosys`、`vivado`，无需已有选择。`xpr-*` 同样补全 `[[xpr]]` 的 id; `xpr-simulation <xpr-id>` 后只补全该 xpr 引用的 simulation id, `xpr-program` 补全 `--hw-server`、`--device`, 不连接硬件。
+`toolchain` 补全 `yosys`、`vivado`，无需已有选择。通用阶段命令按当前工具链补全 project 或 xpr id，`program` 补全对应工具链的选项。
+未选择工具链或选择文件损坏时，通用阶段的补全仍提供 Yosys 候选；补全不会创建或修改选择文件。
+`yosys-*` 始终补全 project id，`xpr-*` 始终补全 `[[xpr]]` 的 id；`xpr-simulation <xpr-id>` 后只补全该 xpr 引用的 simulation id，`xpr-program` 补全 `--hw-server`、`--device`，不连接硬件。
 
 补全不会执行 configure、生成文件、读取 FPGA 本地设置或探测 USB; 配置缺失或无效时静默跳过配置候选, 仍可使用已有辅助文件的 id. 跨目录调用快捷入口时仍读取该入口对应项目的配置.
 
@@ -160,16 +176,16 @@ configure -> model -> auxiliary -> script ---|---> build -> simulate
 
 指定中间环节的任意一个(除program)都会触发前置环节的执行. 例如, `build` 会先执行 `configure`、`model`、`auxiliary` 和 `script`, 再开始构建. `model` 可单独生成符号表和文件依赖图; `auxiliary` 继续生成编译器辅助文件, `script` 继续生成任务脚本. `xpr` 执行 `configure → model → xpr`, 清理、烧录和补全跳过 model. `xpr-*` 执行 `configure → Vivado Tcl`, 在 Tcl 中处理所需 run 依赖, 不触发 model 或工程导出.
 
-指定目标时, 配置校验和文件生成按目标及命令阶段进行. 例如 `simulate tb_example` 不要求其他 project 的构建字段或 FPGA 本地设置正确; `synthesis coreprog` 不要求实现、约束或比特流配置完整. 各命令要求如下:
+指定目标时, 配置校验和文件生成按目标及命令阶段进行. 例如 `simulate tb_example` 不要求其他 project 的构建字段或 FPGA 本地设置正确; `yosys-synthesis coreprog` 不要求实现、约束或比特流配置完整. 通用阶段采用路由后命令的流程和配置要求，各命令要求如下:
 
 | 命令 | 需要的配置 |
 | --- | --- |
 | `model` | 公共项目配置、源码目录及全部源码元数据; 无需任务构建字段或 FPGA 本地设置 |
 | `build` / `simulate` | 当前 simulation、vvp/vcd 路径、顶层模块及其源码依赖 |
-| `synthesis` | 当前 project 的顶层和源码依赖、综合输出、引用 FPGA 及本地构建设置 |
-| `implementation` | 综合所需配置, 加实现输出和已有约束文件 |
-| `bitstream` | 实现所需配置, 加 bitstream/frames 输出 |
-| `program` | 已有 bitstream 的路径、FPGA 引用、可选工具路径、显式 protocol; 无需源码、约束、数据库或 PYTHONPATH |
+| `yosys-synthesis` | 当前 project 的顶层和源码依赖、综合输出、引用 FPGA 及本地构建设置 |
+| `yosys-implementation` | 综合所需配置, 加实现输出和已有约束文件 |
+| `yosys-bitstream` | 实现所需配置, 加 bitstream/frames 输出 |
+| `yosys-program` | 已有 bitstream 的路径、FPGA 引用、可选工具路径、显式 protocol; 无需源码、约束、数据库或 PYTHONPATH |
 | `xpr` | 当前 xpr 引用的 project、simulations、源码依赖、约束、FPGA part 和 xpr 输出目录 |
 | `xpr-simulation` / `xpr-synthesis` / `xpr-implementation` / `xpr-bitstream` / `xpr-program` | 公共配置、所选 xpr 的 project/simulations 引用、`directories.xpr` 和已有 `.xpr`; 无需源码、约束、FPGA part 或本地设置；`xpr-program` 还需要有效 bitstream 和可用 Hardware Server |
 | `clean` / `cleandist` | 所选目标的产物路径; 无需源码、约束或 FPGA 本地设置 |
@@ -300,7 +316,7 @@ PYTHONPATH = ["~/opt/fpga/ego1/src/prjxray"]
 
 脚本按列表顺序设置模块搜索路径，并保留原有 `PYTHONPATH`；执行前检查目录存在。系统不再从 `toolchain-root` 推导 Python 模块目录。省略或填写 `[]` 时可以生成辅助文件和脚本、仿真及清理，但 FPGA 构建会提示填写；直接执行 `jobs.sh` 也会校验。已有比特流的烧录不要求填写数据库或 `PYTHONPATH`。填写后重新执行目标命令或 `script` 刷新脚本。
 
-数据库或 `PYTHONPATH` 未填写时, `auxiliary`、`script`、仿真和清理仍可执行; 而 `synthesis`、`implementation`、`bitstream` 在调用工具前报出对应本地文件的位置. 已有比特流的 `program` 不要求数据库或 `PYTHONPATH`, 但仍必须显式指定 protocol. 烧录时本地文件不存在则使用 PATH; 存在时要求 TOML 可解析, 仅校验并应用 `toolchain-root`, 不设置或检查 PYTHONPATH 目录. 填好设置后重新执行目标命令或 `script` 刷新脚本; 之前生成的 FPGA 构建脚本也会拒绝缺少数据库或 `PYTHONPATH` 的流程, 并提示重新生成.
+数据库或 `PYTHONPATH` 未填写时, `auxiliary`、`script`、仿真和清理仍可执行; 而 `yosys-synthesis`、`yosys-implementation`、`yosys-bitstream` 在调用工具前报出对应本地文件的位置. 已有比特流的 `yosys-program` 不要求数据库或 `PYTHONPATH`, 但仍必须显式指定 protocol. 烧录时本地文件不存在则使用 PATH; 存在时要求 TOML 可解析, 仅校验并应用 `toolchain-root`, 不设置或检查 PYTHONPATH 目录. 填好设置后重新执行目标命令或 `script` 刷新脚本; 之前生成的 FPGA 构建脚本也会拒绝缺少数据库或 `PYTHONPATH` 的流程, 并提示重新生成.
 
 ```sh
 ./buildsys toolchain yosys
@@ -310,6 +326,7 @@ PYTHONPATH = ["~/opt/fpga/ego1/src/prjxray"]
 ./buildsys implementation driver7seg
 ./buildsys bitstream driver7seg
 ./buildsys program driver7seg --protocol ft2232
+# 显式命令等价，例如 ./buildsys yosys-implementation driver7seg
 ```
 
 ## Vivado 工程导出
@@ -349,6 +366,14 @@ buildsys.bat xpr-synthesis driver7seg_vivado
 buildsys.bat xpr-implementation driver7seg_vivado
 buildsys.bat xpr-bitstream driver7seg_vivado
 buildsys.bat xpr-program driver7seg_vivado [--hw-server localhost:3121] [--device "xc7*"]
+```
+
+选择 `vivado` 后，也可以使用通用命令，目标仍为 xpr id：
+
+```bat
+buildsys.bat implementation driver7seg_vivado
+buildsys.bat bitstream driver7seg_vivado
+buildsys.bat program driver7seg_vivado --hw-server localhost:3121 --device "xc7*"
 ```
 
 省略 simulation id 时使用所选 xpr 配置中第一个仿真, 指定 id 必须属于该 xpr。

@@ -11,9 +11,10 @@ import unittest
 from unittest.mock import patch
 
 from completion_ids import xpr_simulation_ids
-from models import XprStageTarget
+from models import Project, XprStageTarget
 from planner import Planner
 from task.configure import configure
+from task.script import generate_script
 from task.vivado.xpr_stage import execute
 from toolchains import select_toolchain
 from util import ConfigError
@@ -125,6 +126,49 @@ simulations = ["first", "second"]
         with self.assertRaisesRegex(ConfigError, "buildsys xpr export first"):
             configure(self.root, "xpr-synthesis", "export")
         self.assertFalse((self.xpr.parent / ".buildsys").exists())
+
+    def test_shared_stages_use_existing_vivado_projects_and_backend_options(self):
+        bitstream = self.bitstream()
+        for stage in ("synthesis", "implementation", "bitstream", "program"):
+            with self.subTest(stage=stage):
+                project = configure(self.root, stage, "export")
+                self.assertEqual(project.command, "xpr-" + stage)
+                self.assertEqual(project.toolchain, "vivado")
+                options = ("--hw-server", "remote:3121", "--device", "xc7a35t*") if stage == "program" else ()
+                state = {"runs": {"synth_1": COMPLETE_SYNTH, "impl_1": COMPLETE_BIT}} if stage == "program" else {}
+                self.succeeded(self.cli(stage, *options, state=state))
+                self.assertTrue((self.xpr.parent / f".buildsys/{stage}.tcl").is_file())
+                if stage == "program":
+                    self.assertIn(["connect_hw_server", "-url", "remote:3121"], self.calls())
+                    self.assertTrue(self.calls("program_hw_devices"))
+                else:
+                    self.assertTrue(self.calls("launch_runs"))
+        self.assertTrue(bitstream.is_file())
+
+    def test_generated_dispatcher_uses_current_selection(self):
+        bash = Path("C:/Program Files/Git/bin/bash.exe") if os.name == "nt" else shutil.which("bash")
+        if not bash or not Path(bash).is_file():
+            self.skipTest("native Git Bash/Bash is unavailable")
+        python = self.tools / "python3"
+        python.write_text(f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "$@"\n', encoding="utf-8")
+        python.chmod(0o755)
+        # Generate while Yosys is selected, then route the same dispatcher to Vivado.
+        select_toolchain(self.root, "yosys")
+        generate_script(Project(self.root, "example", (), (), toolchain="yosys"))
+        select_toolchain(self.root, "vivado")
+        bitstream = self.bitstream()
+        for stage in ("synthesis", "implementation", "bitstream", "program"):
+            with self.subTest(stage=stage):
+                options = ["--hw-server", "remote:3121"] if stage == "program" else []
+                state = {"runs": {"synth_1": COMPLETE_SYNTH, "impl_1": COMPLETE_BIT}} if stage == "program" else {}
+                self.calls_path.unlink(missing_ok=True)
+                result = subprocess.run([str(bash), str(self.root / "jobs.sh"), stage, "export", *options],
+                                        env=dict(self.env, XPR_FAKE_STATE=json.dumps(state)),
+                                        capture_output=True, text=True, timeout=20)
+                self.succeeded(result)
+                if stage == "program":
+                    self.assertIn(["connect_hw_server", "-url", "remote:3121"], self.calls())
+        self.assertTrue(bitstream.is_file())
 
     def test_simulation_defaults_selection_full_runtime_and_waveforms(self):
         for args, fileset in (((), "sim_first"), (("second",), "sim_second")):
