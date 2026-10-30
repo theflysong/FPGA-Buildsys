@@ -13,7 +13,7 @@
 ./buildsys init-venv
 ```
 
-`init-venv` 会在 `main.py` 所在的 buildsys 目录创建 `.venv/`, 并在其中安装 `requirements.txt` 的 `pytcl-eda`. 之后 `buildsys`、`buildsys.sh` 和 `buildsys.bat` 检测到该环境时会自动激活并使用其中的 Python; 没有该目录时仍使用系统 Python.
+`init-venv` 会在 `main.py` 所在的 buildsys 目录创建 `.venv/`, 并在其中安装 `requirements.txt` 的 `pytcl-eda`. 之后 `buildsys`、`buildsys.sh` 和 `buildsys.bat` 检测到该环境时会使用其中的 Python；如果 `VIRTUAL_ENV` 已指向同一个环境，则跳过重复激活，否则先激活该环境。没有该目录时仍使用系统 Python。已有项目可重新运行 `install` 更新入口脚本。
 
 ## 运行示例
 

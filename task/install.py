@@ -32,9 +32,11 @@ def install_wrappers(directory: Path) -> None:
         '        printf "error: incomplete buildsys virtual environment: %s\\n" "$VENV_DIR" >&2',
         '        exit 1',
         '    fi',
-        '    if ! source "$VENV_DIR/bin/activate"; then',
-        '        printf "error: failed to activate buildsys virtual environment: %s\\n" "$VENV_DIR" >&2',
-        '        exit 1',
+        '    if [[ ! "${VIRTUAL_ENV:-}" -ef "$VENV_DIR" ]]; then',
+        '        if ! source "$VENV_DIR/bin/activate"; then',
+        '            printf "error: failed to activate buildsys virtual environment: %s\\n" "$VENV_DIR" >&2',
+        '            exit 1',
+        '        fi',
         '    fi',
         '    exec "$VENV_DIR/bin/python" "$MAIN_PATH" --project "$PROJECT_DIR" "$@"',
         'fi',
@@ -60,8 +62,12 @@ def install_wrappers(directory: Path) -> None:
         'if not exist "%BUILDSYS_VENV%\\" goto system_python\r\n'
         'if not exist "%BUILDSYS_VENV%\\Scripts\\activate.bat" goto incomplete_venv\r\n'
         'if not exist "%BUILDSYS_VENV%\\Scripts\\python.exe" goto incomplete_venv\r\n'
+        # Compare absolute short paths to handle long/short spellings, case,
+        # relative paths and trailing separators without invoking Python.
+        'if defined VIRTUAL_ENV for %%I in ("%VIRTUAL_ENV%\\.") do for %%J in ("%BUILDSYS_VENV%\\.") do if /i "%%~fsI"=="%%~fsJ" goto venv_python\r\n'
         'call "%BUILDSYS_VENV%\\Scripts\\activate.bat"\r\n'
         'if errorlevel 1 goto activation_failed\r\n'
+        ":venv_python\r\n"
         f'"%BUILDSYS_VENV%\\Scripts\\python.exe" "%~dp0{batch_relative}" --project "%~dp0." %*\r\n'
         "exit /b %errorlevel%\r\n"
         ":incomplete_venv\r\n"
