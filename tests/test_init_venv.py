@@ -15,6 +15,7 @@ from task.install import install_wrappers
 
 
 class InitVenvTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm")
     def test_shell_wrapper_uses_buildsys_environment_and_project_cwd(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -25,10 +26,10 @@ class InitVenvTests(unittest.TestCase):
             (source / "main.py").write_text("# fake entry\n")
             scripts = source / ".venv/bin"
             scripts.mkdir(parents=True)
-            (scripts / "activate").write_text(
+            (scripts / ("activate.bat" if os.name == "nt" else "activate")).write_text(
                 f'VIRTUAL_ENV="{source / ".venv"}"; export VIRTUAL_ENV\n'
             )
-            fake_python = scripts / "python"
+            fake_python = scripts / ("python.exe" if os.name == "nt" else "python")
             fake_python.write_text(
                 '#!/usr/bin/env bash\n'
                 'printf "%s\\n" "$VIRTUAL_ENV" > "$VENV_MARKER"\n'
@@ -57,10 +58,10 @@ class InitVenvTests(unittest.TestCase):
                     self.kwargs = kwargs
 
                 def create(self, path: Path) -> None:
-                    scripts = path / "bin"
+                    scripts = path / ("Scripts" if os.name == "nt" else "bin")
                     scripts.mkdir(parents=True)
-                    (scripts / "python").touch()
-                    (scripts / "activate").touch()
+                    (scripts / ("python.exe" if os.name == "nt" else "python")).touch()
+                    (scripts / ("activate.bat" if os.name == "nt" else "activate")).touch()
 
             def pip(command: list[str], **kwargs: object) -> None:
                 calls.append(command)
@@ -71,7 +72,7 @@ class InitVenvTests(unittest.TestCase):
                 self.assertEqual(init_venv.run(argparse.Namespace()), 0)
 
             self.assertEqual(calls, [[
-                str(root / ".venv/bin/python"), "-m", "pip", "install", "-r",
+                str(root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")), "-m", "pip", "install", "-r",
                 str(root / "requirements.txt"),
             ]])
 
@@ -79,10 +80,10 @@ class InitVenvTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "requirements.txt").write_text("pytcl-eda==0.3.0\n")
-            scripts = root / ".venv/bin"
+            scripts = root / ".venv" / ("Scripts" if os.name == "nt" else "bin")
             scripts.mkdir(parents=True)
-            (scripts / "python").touch()
-            (scripts / "activate").touch()
+            (scripts / ("python.exe" if os.name == "nt" else "python")).touch()
+            (scripts / ("activate.bat" if os.name == "nt" else "activate")).touch()
             with patch.object(init_venv, "BUILDSYS_DIR", root), \
                  patch.object(init_venv.venv, "EnvBuilder") as builder, \
                  patch.object(init_venv.subprocess, "run") as pip:
@@ -94,10 +95,10 @@ class InitVenvTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "requirements.txt").write_text("pytcl-eda==0.3.0\n")
-            scripts = root / ".venv/bin"
+            scripts = root / ".venv" / ("Scripts" if os.name == "nt" else "bin")
             scripts.mkdir(parents=True)
-            (scripts / "python").touch()
-            (scripts / "activate").touch()
+            (scripts / ("python.exe" if os.name == "nt" else "python")).touch()
+            (scripts / ("activate.bat" if os.name == "nt" else "activate")).touch()
             failure = subprocess.CalledProcessError(9, ["pip"])
             with patch.object(init_venv, "BUILDSYS_DIR", root), \
                  patch.object(init_venv.subprocess, "run", side_effect=failure):

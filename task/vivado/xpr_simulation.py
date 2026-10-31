@@ -11,12 +11,13 @@ __doc__ = "Run one simulation from an existing Vivado XPR project."
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("target_id", metavar="xpr-id")
-    parser.add_argument("simulation_id", metavar="simulation-id", nargs="?")
+    parser.add_argument("target_id", metavar="simulation-id")
+    parser.add_argument("legacy_simulation_id", nargs="?", help=argparse.SUPPRESS)
 
 
-def script_arguments(arguments: argparse.Namespace) -> tuple[str, ...]:
-    return (arguments.simulation_id,) if arguments.simulation_id is not None else ()
+def validate_arguments(arguments: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    if arguments.legacy_simulation_id is not None:
+        parser.error("xpr-simulation now takes only a simulation-id; omit the old xpr-id")
 
 
 def execute(project, target_id, task_args=(), script=None):

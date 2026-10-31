@@ -58,8 +58,8 @@ def build_model(project: Project) -> Project:
         if isinstance(target, (Simulation, SynthesisProgram))
     ]
     for target in project.xprs:
-        targets.append(("project", target.project_id, target.top))
-        targets.extend(("simulation", simulation.identifier, simulation.top) for simulation in target.simulations)
+        targets.append(("project", target.identifier, target.top))
+    targets.extend(("simulation", simulation.identifier, simulation.top) for simulation in project.xpr_simulations)
     for kind, identifier, top in targets:
         if top not in exports:
             raise ConfigError(
@@ -102,7 +102,7 @@ def build_model(project: Project) -> Project:
             if project.is_simulation_source(source):
                 raise ConfigError(
                     f"{project.root / Path(source).with_suffix('.toml')}: "
-                    f"project {target.project_id!r} depends on a file in directories.simulation"
+                    f"project {target.identifier!r} depends on a file in directories.simulation"
                 )
     return replace(project, exports=exports, sources=sources)
 

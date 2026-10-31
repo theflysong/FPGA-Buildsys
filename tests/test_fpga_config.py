@@ -37,16 +37,7 @@ class FpgaConfigurationTests(unittest.TestCase):
             '[[module.export]]\nname = "tb"\n[[module.import]]\nname = "core"\n'
         )
         self.config.write_text(
-            'name = "Mixed project"\nid = "mixed"\n'
-            '[directories]\nsources = ["src"]\nconstraints = ["constraints"]\n'
-            'vvp = "build/vvp"\nvcd = "build/vcd"\n'
-            'synthesis = "build/synth"\nimplementation = "build/impl"\nbitstream = "build/bits"\n'
-            '[[simulation]]\nid = "demo"\ntop-symbol = "tb"\ntimescale = "1ns/1ps"\n'
-            'vvp = "demo.vvp"\nvcd = "demo.vcd"\n'
-            '[[fpga]]\nid = "ego1"\npart = "xc7a35tcsg324-1"\n'
-            '[[project]]\nid = "main"\nfpga = "ego1"\ntop-symbol = "core"\n'
-            'synthesis = "main.json"\nimplementation = "main.fasm"\n'
-            'bitstream = "main.bit"\nconstraints = "board.xdc"\n'
+            'name = "Mixed project"\nid = "mixed"\n[directories]\nsources = ["src"]\nconstraints = ["constraints"]\n[[simulation]]\nid = "demo"\ntop-symbol = "tb"\ntimescale = "1ns/1ps"\n[[fpga]]\nid = "ego1"\npart = "xc7a35tcsg324-1"\n[[project]]\nid = "main"\nfpga = "ego1"\ntop-symbol = "core"\nconstraints = "board.xdc"\n'
         )
 
     def cli(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -76,7 +67,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(str(self.local), result.stderr)
         self.assertIn("toolchain-root is optional", result.stderr)
-        self.assertEqual(self.local.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.local.stat().st_mode & 0o777, 0o666 if os.name == "nt" else 0o600)
         self.assertIn('xray-database = ""', self.local.read_text())
         self.assertIn('toolchain-root = []', self.local.read_text())
         self.assertIn('PYTHONPATH = []', self.local.read_text())
@@ -89,6 +80,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.assertNotIn("Created", again.stderr)
         self.assertEqual((self.local.read_bytes(), self.local.stat().st_mtime_ns), before)
 
+    @unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm")
     def test_pending_fpga_builds_stop_before_tools_in_both_entries(self) -> None:
         env = self.fake_tools()
         generated = self.cli("script", env=env)
@@ -96,7 +88,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         for command in ("synthesis", "implementation", "bitstream"):
             result = self.cli(command, "main", env=env)
             self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(result.stdout.splitlines(), ["configure", "model"])
+            self.assertEqual(result.stdout.splitlines()[:2], ["configure", "model"])
             self.assertIn(str(self.local), result.stderr)
             direct = subprocess.run([str(self.root / "jobs.sh"), command, "main"],
                                     capture_output=True, text=True, env=env)
@@ -110,20 +102,20 @@ class FpgaConfigurationTests(unittest.TestCase):
     def test_simulation_runs_before_local_fpga_paths_are_filled(self) -> None:
         result = self.cli("simulate", "demo")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.root / "build/vvp/demo.vvp").is_file())
-        self.assertTrue((self.root / "build/vcd/demo.vcd").is_file())
+        self.assertTrue((self.root / "build/icarus/demo/demo.vvp").is_file())
+        self.assertTrue((self.root / "build/icarus/demo/demo.vcd").is_file())
         clean = self.cli("clean")
         self.assertEqual(clean.returncode, 0, clean.stderr)
         self.assertFalse(self.local.exists())
-        self.assertFalse((self.root / "build/vvp/demo.vvp").exists())
+        self.assertFalse((self.root / "build/icarus/demo/demo.vvp").exists())
 
+    @unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm")
     def test_settings_paths_and_only_selected_fpga_blocks_build(self) -> None:
         with self.config.open("a") as stream:
             stream.write(
                 '[[fpga]]\nid = "other"\npart = "xc7a35tcsg324-1"\n'
                 '[[project]]\nid = "other_main"\nfpga = "other"\ntop-symbol = "core"\n'
-                'synthesis = "other.json"\nimplementation = "other.fasm"\n'
-                'bitstream = "other.bit"\nconstraints = "board.xdc"\n'
+                'constraints = "board.xdc"\n'
             )
         self.local.parent.mkdir(parents=True)
         toolchain = self.root / "toolchain with spaces"
@@ -132,7 +124,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         env = self.fake_tools()
         result = self.cli("synthesis", "main", env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.root / "build/synth/main.json").read_text(), '{"modules":{}}\n')
+        self.assertEqual((self.root / "build/yosys/main/main.json").read_text(), '{"modules":{}}\n')
         script = (self.root / "build/jobs/main/synthesis.sh").read_text()
         self.assertIn(str(self.root / "database"), script)
         self.assertIn(str(toolchain), script)
@@ -159,7 +151,6 @@ class FpgaConfigurationTests(unittest.TestCase):
             original.replace('synthesis = "main.json"\n', ''),
             original.replace('part = "xc7a35tcsg324-1"\n', ''),
             original.replace('constraints = "board.xdc"', 'constraints = "absent.xdc"'),
-            original.replace('synthesis = "build/synth"', 'synthesis = 42'),
         ):
             with self.subTest(config=text):
                 self.config.write_text(text)
@@ -170,6 +161,7 @@ class FpgaConfigurationTests(unittest.TestCase):
                 self.assertEqual(self.local.read_text(), "invalid TOML [")
                 self.assertFalse((self.root / "build/jobs/main").exists())
 
+    @unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm")
     def test_synthesis_ignores_simulation_and_later_stage_fields(self) -> None:
         self.local.parent.mkdir(parents=True)
         self.local.write_text('xray-database = "database"\nPYTHONPATH = ["src"]\n')
@@ -196,7 +188,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         )
         result = self.cli("synthesis", "main", env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.root / "build/synth/main.json").read_text(), '{"modules":{}}\n')
+        self.assertEqual((self.root / "build/yosys/main/main.json").read_text(), '{"modules":{}}\n')
         self.assertEqual((self.root / "calls").read_text().splitlines(), [str(self.root / "tools/yosys")])
         self.assertEqual({path.name for path in (self.root / "build/jobs/main").iterdir()}, {"synthesis.sh"})
         self.assertFalse((self.root / "build/auxiliary/demo.f").exists())
@@ -205,8 +197,9 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.assertNotEqual(self.cli("auxiliary").returncode, 0)
         required = self.cli("implementation", "main", env=env)
         self.assertNotEqual(required.returncode, 0)
-        self.assertIn("directories.implementation", required.stderr)
+        self.assertIn("constraints", required.stderr)
 
+    @unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm")
     def test_implementation_ignores_bitstream_configuration(self) -> None:
         self.local.parent.mkdir(parents=True)
         self.local.write_text('xray-database = "database"\nPYTHONPATH = ["src"]\n')
@@ -221,13 +214,14 @@ class FpgaConfigurationTests(unittest.TestCase):
         )
         result = self.cli("implementation", "main", env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.root / "build/impl/main.fasm").read_text(), "# fake FASM\n")
+        self.assertEqual((self.root / "build/yosys/main/main.fasm").read_text(), "# fake FASM\n")
         self.assertEqual({path.name for path in (self.root / "build/jobs/main").iterdir()},
                          {"synthesis.sh", "implementation.sh"})
         required = self.cli("bitstream", "main", env=env)
-        self.assertNotEqual(required.returncode, 0)
-        self.assertIn("directories.bitstream", required.stderr)
+        self.assertNotEqual(required.returncode, 0)  # fake fasm2frames exits 99
+        self.assertNotIn("configuration.toml:", required.stderr)
 
+    @unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm")
     def test_tools_are_found_in_root_and_bin(self) -> None:
         self.local.parent.mkdir(parents=True)
         for index, layout in enumerate((".", "bin")):
@@ -254,8 +248,9 @@ class FpgaConfigurationTests(unittest.TestCase):
                 self.assertEqual(calls.read_text().splitlines(), [
                     str(tool_dir / "yosys"), str(tool_dir / "nextpnr-himbaechel"),
                 ])
-                self.assertEqual((self.root / "build/impl/main.fasm").read_text(), "# fake FASM\n")
+                self.assertEqual((self.root / "build/yosys/main/main.fasm").read_text(), "# fake FASM\n")
 
+    @unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm")
     def test_multiple_roots_supply_different_tools_in_list_order(self) -> None:
         self.local.parent.mkdir(parents=True)
         first = self.root / "first root"
@@ -284,6 +279,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.assertEqual((self.root / "calls").read_text().splitlines(),
                          [str(first / "yosys"), str(nextpnr)])
 
+    @unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm")
     def test_search_paths_only_add_root_and_bin_and_preserve_environment(self) -> None:
         self.local.parent.mkdir(parents=True)
         first = self.root / "first root"
@@ -331,6 +327,7 @@ class FpgaConfigurationTests(unittest.TestCase):
             self.assertNotIn("export PATH=", script)
             self.assertIn("export PYTHONPATH=", script)
 
+    @unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm")
     def test_unfilled_pythonpath_blocks_fpga_builds_in_both_entries(self) -> None:
         self.local.parent.mkdir(parents=True)
         toolchain = self.root / "toolchain"
@@ -348,7 +345,7 @@ class FpgaConfigurationTests(unittest.TestCase):
             for command in ("synthesis", "implementation", "bitstream"):
                 result = self.cli(command, "main", env=env)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(result.stdout.splitlines(), ["configure", "model"])
+                self.assertEqual(result.stdout.splitlines()[:2], ["configure", "model"])
                 self.assertIn("fill PYTHONPATH", result.stderr)
                 direct = subprocess.run([str(self.root / "jobs.sh"), command, "main"],
                                         capture_output=True, text=True, env=env)
@@ -357,6 +354,7 @@ class FpgaConfigurationTests(unittest.TestCase):
                 self.assertIn("ego1.toml", direct.stderr)
             self.assertFalse((self.root / "calls").exists())
 
+    @unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm")
     def test_missing_pythonpath_directory_stops_before_tools(self) -> None:
         self.local.parent.mkdir(parents=True)
         self.local.write_text('xray-database = "database"\nPYTHONPATH = ["missing Python modules"]\n')
@@ -366,6 +364,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.assertIn(f"Missing PYTHONPATH directory: {self.root / 'missing Python modules'}", result.stderr)
         self.assertFalse((self.root / "calls").exists())
 
+    @unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm")
     def test_missing_listed_root_reports_its_path_before_tools(self) -> None:
         self.local.parent.mkdir(parents=True)
         self.local.write_text('xray-database = "database"\nPYTHONPATH = ["src"]\ntoolchain-root = ["missing root"]\n')
@@ -412,27 +411,17 @@ class FpgaConfigurationTests(unittest.TestCase):
             self.assertIn(error, result.stderr)
             self.assertFalse(self.local.parent.exists())
 
-    def test_output_directories_require_single_path_strings(self) -> None:
+    def test_removed_product_fields_give_migration_errors(self) -> None:
         original = self.config.read_text()
-        for kind, directory in (
-            ("vvp", "build/vvp"), ("vcd", "build/vcd"),
-            ("synthesis", "build/synth"), ("implementation", "build/impl"),
-            ("bitstream", "build/bits"),
-        ):
-            for value in ('["build/output"]', '[]', '["one", "two"]', '42', '""', '"   "', None):
-                with self.subTest(kind=kind, value=value):
-                    old = f'{kind} = "{directory}"\n'
-                    replacement = f'{kind} = {value}\n' if value is not None else ""
-                    self.config.write_text(original.replace(old, replacement))
+        for kind in ("vvp", "vcd", "xpr", "synthesis", "implementation", "bitstream"):
+            for location in ("[directories]", 'id = "main"'):
+                with self.subTest(kind=kind, location=location):
+                    self.config.write_text(original.replace(location, location + f'\n{kind} = "old"'))
                     result = self.cli("auxiliary")
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn(str(self.config), result.stderr)
-                    self.assertIn(f"directories.{kind} must be a nonempty path string", result.stderr)
+                    self.assertIn("obsolete", result.stderr)
+                    self.assertIn(kind, result.stderr)
                     self.assertFalse((self.root / "build").exists())
-        self.config.write_text(original)
-        self.assertEqual(self.cli("script").returncode, 0)
-        self.assertTrue((self.root / "build/auxiliary/demo.f").is_file())
-        self.assertTrue((self.root / "build/auxiliary/main.ys").is_file())
 
     def test_local_toml_and_field_types_are_validated(self) -> None:
         self.assertEqual(self.cli("auxiliary").returncode, 0)

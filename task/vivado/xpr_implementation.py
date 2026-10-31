@@ -11,7 +11,7 @@ __doc__ = "Run implementation in an existing Vivado XPR project."
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("target_id", metavar="xpr-id")
+    parser.add_argument("target_id", metavar="project-id")
 
 
 def execute(project, target_id, task_args=(), script=None):

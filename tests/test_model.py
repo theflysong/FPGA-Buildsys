@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 from task.auxiliary import generate_auxiliary
-from task.clean import cleanup_script
+from task.clean import cleanup, cleanup_script
 from task.configure import configure
 from task.model import build_model, generate_model
 from toolchains import select_toolchain
@@ -32,11 +32,7 @@ class ModelTests(unittest.TestCase):
         (self.root / "sim").mkdir()
         self.config = self.root / "configuration.toml"
         self.original = (
-            'name = "Source graph"\nid = "graph"\n'
-            '[directories]\nsources = ["src"]\nsimulation = ["sim"]\n'
-            'vvp = "build/vvp"\nvcd = "build/vcd"\n'
-            '[[simulation]]\nid = "test"\ntop-symbol = "tb"\ntimescale = "1ns/1ps"\n'
-            'vvp = "test.vvp"\nvcd = "test.vcd"\n'
+            'name = "Source graph"\nid = "graph"\n[directories]\nsources = ["src"]\nsimulation = ["sim"]\n[[simulation]]\nid = "test"\ntop-symbol = "tb"\ntimescale = "1ns/1ps"\n'
         )
         self.config.write_text(self.original, encoding="utf-8")
         self.source("src/leaf.v", ("leaf", "leaf_alias"))
@@ -72,7 +68,7 @@ class ModelTests(unittest.TestCase):
         before = local.read_bytes(), local.stat().st_mtime_ns
         result = self.cli("model")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), ["configure", "model"])
+        self.assertEqual(result.stdout.splitlines()[:2], ["configure", "model"])
         self.assertEqual((local.read_bytes(), local.stat().st_mtime_ns), before)
         self.assertEqual(len(list((self.root / "build/model").glob("*.json"))), 4)
         self.assertFalse((self.root / "build/auxiliary").exists())
@@ -191,26 +187,27 @@ class ModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "leaf.toml"):
             build_model(project)
 
-    def test_cleanup_scripts_preserve_shared_models_except_full_cleandist(self) -> None:
+    def test_cleanup_scripts_forward_to_python_and_preserve_models(self):
+        self.assertEqual(self.cli("script").returncode, 0)
         project = configure(self.root, "cleandist")
         for target, dist in ((None, False), ("test", False), ("test", True)):
             script = "\n".join(cleanup_script(project, target, dist=dist))
-            self.assertNotIn("build/model", script)
-            self.assertNotIn("build/symbol", script)
-        script = "\n".join(cleanup_script(project, None, dist=True))
-        self.assertIn("rm -rf -- build/model", script)
-        self.assertIn("rm -rf -- build/symbol", script)
+            self.assertIn("main.py", script)
+            self.assertIn("cleandist" if dist else "clean", script)
+            self.assertNotIn("rm -rf", script)
+            cleanup(project, target, dist=dist)
+            self.assertTrue(project.model_dir.is_dir())
+            self.assertTrue(project.symbol_dir.is_dir())
+        cleanup(project, None, dist=True)
+        self.assertFalse(project.model_dir.exists())
+        self.assertFalse(project.symbol_dir.exists())
 
     def test_metadata_errors_precede_fpga_settings_initialization(self) -> None:
         (self.root / "constraints").mkdir()
         (self.root / "constraints/board.xdc").write_text("# constraints")
         self.config.write_text(self.original.replace('[directories]\n',
-            '[directories]\nconstraints = ["constraints"]\nsynthesis = "build/synth"\n'
-            'implementation = "build/impl"\nbitstream = "build/bits"\n')
-            + '[[fpga]]\nid = "board"\npart = "xc7a35tcsg324-1"\n'
-            '[[project]]\nid = "design"\nfpga = "board"\ntop-symbol = "left"\n'
-            'constraints = "board.xdc"\nsynthesis = "design.json"\n'
-            'implementation = "design.fasm"\nbitstream = "design.bit"\n')
+            '[directories]\nconstraints = ["constraints"]\n')
+            + '[[fpga]]\nid = "board"\npart = "xc7a35tcsg324-1"\n[[project]]\nid = "design"\nfpga = "board"\ntop-symbol = "left"\nconstraints = "board.xdc"\n')
         self.source("src/left.v", ("left",), ("missing",))
         failure = self.cli("script")
         self.assertNotEqual(failure.returncode, 0)

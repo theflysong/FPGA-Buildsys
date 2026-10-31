@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import shlex
+from artifacts import shell_report, target_artifacts
 
 from models import Program, Project
 from util import (
@@ -25,6 +26,7 @@ def generate_script(project: Project, program: Program) -> None:
         output_directory=shlex.quote(relative(project, program.bitstream.parent)),
         implementation=shlex.quote(implementation), frames=shlex.quote(frames),
         bitstream=shlex.quote(bitstream),
+        report=shell_report(project, target_artifacts(program)),
     )
 
 

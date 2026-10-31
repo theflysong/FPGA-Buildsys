@@ -12,3 +12,4 @@ if ! yosys -Q -q -l "$synth_log" -s "$yosys_script" | python3 "$json_compactor" 
   rm -f -- $(synthesis)
   exit 1
 fi
+$(report)

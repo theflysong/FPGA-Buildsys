@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import shlex
+from artifacts import shell_report, target_artifacts
 
 from models import Project, SynthesisProgram
 from util import (
@@ -26,6 +27,7 @@ def generate_script(project: Project, program: SynthesisProgram) -> None:
         log_directory=shlex.quote(f"/dev/shm/buildsys-{project.identifier}-{program.identifier}-synthesis-XXXXXX"),
         program_id=program.identifier, json_compactor=shlex.quote(json_compactor),
         synthesis=shlex.quote(synthesis),
+        report=shell_report(project, target_artifacts(program, stage="synthesis")),
     )
 
 

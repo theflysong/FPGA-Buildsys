@@ -1,3 +1,5 @@
 $(header)
-"$PROJECT_ROOT/"$(build_script)
+BUILDSYS_REPORT_SUPPRESS=1 "$PROJECT_ROOT/"$(build_script)
+rm -f -- $(vcd_file)
 vvp -N $(vvp_file)
+$(report)

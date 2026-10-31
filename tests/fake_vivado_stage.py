@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import shutil
 import tkinter
 
 
@@ -17,10 +18,12 @@ script = Path(sys.argv[sys.argv.index("-source") + 1])
 log = Path(sys.argv[sys.argv.index("-log") + 1])
 log.write_text(state.get("log", ""), encoding="utf-8")
 pending = {}
-directory = Path(state.get("directory", Path.cwd() / "export.runs/impl_1"))
 runs = {
-    name: dict(STATUS="Not started", PROGRESS="0%", NEEDS_REFRESH="0", DIRECTORY=str(directory))
-    for name in ("synth_1", "impl_1")
+    name: dict(STATUS="Not started", PROGRESS="0%", NEEDS_REFRESH="0",
+               DIRECTORY=state.get("directory", str(Path.cwd() / "example.runs" / name)),
+               SRCSET="src_" + identifier, CONSTRSET="constrs_" + identifier)
+    for identifier in ("core", "other_core")
+    for name in ("synth_" + identifier, "impl_" + identifier)
 }
 for name, properties in state.get("runs", {}).items():
     runs[name].update(properties)
@@ -52,11 +55,14 @@ def dispatch(name, *args):
             return ("error", f"unknown property {prop} on {obj}")
         if name == "reset_run":
             runs[args[0]].update(STATUS="Not started", PROGRESS="0%", NEEDS_REFRESH="0")
-            if args[0] == "synth_1":
-                runs["impl_1"].update(STATUS="Not started", PROGRESS="0%", NEEDS_REFRESH="1")
+            directory = Path(runs[args[0]]["DIRECTORY"])
+            if directory.is_dir():
+                shutil.rmtree(directory)
+            if args[0].startswith("synth_"):
+                runs["impl_" + args[0][6:]].update(STATUS="Not started", PROGRESS="0%", NEEDS_REFRESH="1")
         if name == "launch_runs":
             pending[args[0]] = "write_bitstream" if "-to_step" in args else (
-                "synth_design" if args[0] == "synth_1" else "route_design")
+                "synth_design" if args[0].startswith("synth_") else "route_design")
         if name == "wait_on_run":
             run = args[0]
             step = pending[run]
@@ -65,12 +71,23 @@ def dispatch(name, *args):
             else:
                 runs[run].update(STATUS=f"{step} Complete!", PROGRESS="100%", NEEDS_REFRESH="0")
                 runs[run].update(state.get("after_wait", {}))
+                directory = Path(runs[run]["DIRECTORY"])
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / "top.dcp").touch()
                 if step == "write_bitstream" and not state.get("omit_bitstream"):
-                    directory.mkdir(parents=True, exist_ok=True)
                     (directory / "top.bit").write_bytes(b"fake bitstream")
         if name == "get_hw_devices":
             return ("ok", tuple(devices))
+        if name == "reset_simulation":
+            directory = Path(str(tcl.getvar("::buildsys::simulation_directory")))
+            if directory.is_dir():
+                shutil.rmtree(directory)
         if name == "launch_simulation":
+            directory = Path(str(tcl.getvar("::buildsys::simulation_directory")))
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "top.wdb").touch()
+            if state.get("vcd"):
+                (directory / "top.vcd").touch()
             print("Simulation reached $finish", flush=True)
             if state.get("simulation_fatal"):
                 print("Fatal: testbench assertion failed", flush=True)
@@ -83,7 +100,7 @@ tcl.createcommand("fake_dispatch", dispatch)
 for command in (
     "open_project", "close_project", "get_runs", "get_filesets", "list_property",
     "get_property", "set_property", "reset_run", "launch_runs", "wait_on_run",
-    "launch_simulation", "close_sim", "open_hw_manager", "connect_hw_server",
+    "launch_simulation", "close_sim", "current_run", "current_fileset", "get_files", "reset_simulation", "open_hw_manager", "connect_hw_server",
     "open_hw_target", "get_hw_devices", "current_hw_device", "program_hw_devices",
     "refresh_hw_device", "close_hw_target", "disconnect_hw_server", "close_hw_manager", "open_hw", "close_hw",
 ):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from completion_ids import ID_RE, candidate_ids, xpr_simulation_ids
+from completion_ids import ID_RE, candidate_ids
 from toolchains import STAGES, YOSYS_COMMANDS, resolve_command
 from util import ConfigError
 
@@ -93,14 +93,14 @@ def program_candidates(root: Path, words: list[str], *, xpr: bool) -> list[str]:
         elif word.startswith("-"):
             if not xpr:
                 return []
-        elif target_seen and not xpr:
+        elif target_seen:
             return []
         else:
             target_seen = True
     if expecting_value:
         return []
     if not target_seen and (xpr or not words[-1].startswith("-")):
-        return candidate_ids(root / "configuration.toml", "xpr") if xpr else target_ids(root, ".ys")
+        return candidate_ids(root / "configuration.toml", "project") if xpr else target_ids(root, ".ys")
     if "--busdev-num" in supplied or "--ftdi-serial" in supplied:
         supplied.update(("--busdev-num", "--ftdi-serial"))
     return [option for option in options if option not in supplied]
@@ -133,8 +133,8 @@ def candidates(root: Path, words: list[str]) -> list[str]:
             result = target_ids(root, ".ys")
         elif command in {"clean", "cleandist"}:
             result = target_ids(root, ".f", ".ys")
-        elif command in {"xpr", "xpr-simulation", "xpr-synthesis", "xpr-implementation", "xpr-bitstream"}:
-            result = candidate_ids(root / "configuration.toml", "xpr")
-    elif command == "xpr-simulation" and position == 2:
-        result = xpr_simulation_ids(root / "configuration.toml", words[1])
+        elif command == "xpr-simulation":
+            result = candidate_ids(root / "configuration.toml", "simulation")
+        elif command in {"xpr-synthesis", "xpr-implementation", "xpr-bitstream"}:
+            result = candidate_ids(root / "configuration.toml", "project")
     return list(dict.fromkeys(item for item in result if item.startswith(prefix)))

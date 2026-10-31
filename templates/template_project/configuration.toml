@@ -5,12 +5,8 @@ id = "id_for_your_project"
 constraints = ["src/constraints/"]
 sources = ["src/modules/"]
 simulation = ["sim/"]
-vvp = "build/sim"
-vcd = "build/sim"
 
 [[simulation]]
 id = "example_simulation"
 top-symbol = "tbSimulation"
 timescale = "1ns/1ps"
-vvp = "example.vvp"
-vcd = "example.vcd"

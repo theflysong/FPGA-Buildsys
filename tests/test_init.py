@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import os
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,8 @@ class InitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def run_command(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        if os.name == "nt" and args and Path(args[0]).name in {"buildsys", "buildsys.sh"}:
+            args = (str(Path(args[0]).with_name("buildsys.bat")), *args[1:])
         return subprocess.run(args, cwd=cwd or self.base, capture_output=True,
                               text=True, timeout=15)
 
@@ -119,7 +122,7 @@ class InitTests(unittest.TestCase):
                           for time, addr, data, char in records],
                          [(index * 500, index, ord(char), char)
                           for index, char in enumerate("Hello,World!")])
-        waveform = (self.root / "build/sim/example.vcd").read_text()
+        waveform = (self.root / "build/icarus/example_simulation/example_simulation.vcd").read_text()
         self.assertRegex(waveform, r"\$timescale\s+1ps\s+\$end")
         address_declaration = re.search(
             r"\$var\s+reg\s+4\s+(\S+)\s+addr(?:\s+\[3:0\])?\s+\$end", waveform

@@ -9,10 +9,11 @@ from models import (
     CleanupTarget, Fpga, ImplementationProgram, Program, ProgrammingTarget,
     Project, Simulation, SynthesisProgram,
 )
+from layout import Layout
 from toolchains import command_toolchain, resolve_command
 from util import (
     ConfigError, ID_RE, SYMBOL_RE, TIMESCALE_RE, fpga_config_path,
-    output_directory, output_name, project_path, read_toml, required_string,
+    output_name, project_path, read_toml, required_string,
     string_list, task_identifier,
 )
 from .vivado.configure import configure_xpr, configure_xpr_stage
@@ -22,6 +23,13 @@ from .yosys.configure import toolchain_roots
 def task_index(data: dict, config_path: Path) -> dict[str, tuple[str, dict, str]]:
     if "program" in data:
         raise ConfigError(f"{config_path}: [[program]] is obsolete; rename it to [[project]]")
+    if "xpr" in data:
+        raise ConfigError(f"{config_path}: [[xpr]] is obsolete; remove it: buildsys xpr exports all targets")
+    product_fields = {"vvp", "vcd", "xpr", "synthesis", "implementation", "bitstream"}
+    directories = data.get("directories", {})
+    if isinstance(directories, dict) and (removed := product_fields.intersection(directories)):
+        raise ConfigError(f"{config_path}: remove obsolete directories fields {', '.join(sorted(removed))}; "
+                          "buildsys now chooses product paths automatically")
     entries: dict[str, tuple[str, dict, str]] = {}
     for kind in ("simulation", "project"):
         raw_entries = data.get(kind, [])
@@ -31,6 +39,9 @@ def task_index(data: dict, config_path: Path) -> dict[str, tuple[str, dict, str]
             location = f"{config_path}: {kind}[{index}]"
             if not isinstance(raw, dict):
                 raise ConfigError(f"{location}: expected a table")
+            if removed := product_fields.intersection(raw):
+                raise ConfigError(f"{location}: remove obsolete product fields {', '.join(sorted(removed))}; "
+                                  "buildsys now chooses product paths automatically")
             task_id = task_identifier(raw, location)
             if task_id in entries:
                 raise ConfigError(
@@ -81,13 +92,14 @@ def parse_fpga(root: Path, fpga_id: str, raw: dict, location: str) -> Fpga:
 def constraint_path(root: Path, directories: dict, config_path: Path,
                     raw: dict, location: str) -> Path:
     constraint_dirs = string_list(directories, "constraints", str(config_path))
-    if len(constraint_dirs) != 1:
-        raise ConfigError(f"{config_path}: directories.constraints must contain one path")
-    directory = project_path(root, constraint_dirs[0], f"{config_path}: directories.constraints")
-    path = directory / output_name(required_string(raw, "constraints", location), location)
-    if not path.is_file():
-        raise ConfigError(f"{location}: constraints file does not exist: {path}")
-    return path
+    name = output_name(required_string(raw, "constraints", location), location)
+    paths = {project_path(root, str(Path(directory) / name), location) for directory in constraint_dirs}
+    matches = sorted(path for path in paths if path.is_file())
+    if not matches:
+        raise ConfigError(f"{location}: constraints file does not exist: {name!r} in directories.constraints")
+    if len(matches) > 1:
+        raise ConfigError(f"{location}: ambiguous constraints file {name!r}: " + ", ".join(map(str, matches)))
+    return matches[0]
 
 
 def configure(root: Path, command: str = "script", target_id: str | None = None) -> Project:
@@ -104,6 +116,7 @@ def _configure(root: Path, command: str, target_id: str | None, toolchain: str |
     identifier = required_string(data, "id", str(config_path), ID_RE)
     required_string(data, "name", str(config_path))
     entries = task_index(data, config_path)
+    layout = Layout(root)
     if command == "model":
         directories = data.get("directories")
         if not isinstance(directories, dict):
@@ -128,19 +141,6 @@ def _configure(root: Path, command: str, target_id: str | None, toolchain: str |
     if not isinstance(directories, dict):
         raise ConfigError(f"{config_path}: [directories] is required")
 
-    seen_outputs: set[Path] = set()
-
-    def output(raw: dict, kind: str, location: str) -> Path:
-        directory = output_directory(root, directories, kind, str(config_path))
-        path = directory / output_name(required_string(raw, kind, location), location)
-        register_output(path, location)
-        return path
-
-    def register_output(path: Path, location: str) -> None:
-        if path in seen_outputs:
-            raise ConfigError(f"{location}: duplicate output {path}")
-        seen_outputs.add(path)
-
     needs_fpga = (full and toolchain == "yosys") or (
         not full and not cleaning and any(kind == "project" for kind, _, _ in selected.values())
     )
@@ -163,32 +163,27 @@ def _configure(root: Path, command: str, target_id: str | None, toolchain: str |
     programs: list[SynthesisProgram | ProgrammingTarget] = []
     cleanup_targets: list[CleanupTarget] = []
     for task_id, (kind, raw, location) in selected.items():
+        outputs = (tuple(layout.simulation(task_id, ext) for ext in ("vvp", "vcd")) if kind == "simulation"
+                   else tuple(layout.design(task_id, ext) for ext in ("json", "fasm", "frames", "bit")))
+        suffix = ".f" if kind == "simulation" else ".ys"
+        if cleaning or full:
+            cleanup_targets.append(CleanupTarget(task_id, outputs, root / "build/auxiliary" / f"{task_id}{suffix}", kind))
         if full and toolchain == "vivado" and kind == "project":
             continue
         if cleaning:
-            kinds = ("vvp", "vcd") if kind == "simulation" else ("synthesis", "implementation", "bitstream")
-            outputs = tuple(output(raw, name, location) for name in kinds)
-            if kind == "project":
-                frames = outputs[-1].with_suffix(".frames")
-                register_output(frames, location)
-                outputs = (*outputs, frames)
-            suffix = ".f" if kind == "simulation" else ".ys"
-            cleanup_targets.append(CleanupTarget(task_id, outputs, root / "build/auxiliary" / f"{task_id}{suffix}"))
             continue
         if kind == "simulation":
             top = required_string(raw, "top-symbol", location, SYMBOL_RE)
-            timescale = required_string(raw, "timescale", location, TIMESCALE_RE)
-            vvp, vcd = (output(raw, name, location) for name in ("vvp", "vcd"))
+            timescale = required_string({"timescale": "1ns/1ps", **raw}, "timescale", location, TIMESCALE_RE)
+            vvp, vcd = outputs
             simulations.append(Simulation(task_id, top, timescale, vvp, vcd))
-            if full:
-                cleanup_targets.append(CleanupTarget(task_id, (vvp, vcd), root / "build/auxiliary" / f"{task_id}.f"))
             continue
 
         fpga_id = required_string(raw, "fpga", location, ID_RE)
         if stage == "program":
             if fpga_id not in raw_fpgas:
                 raise ConfigError(f"{location}: unknown fpga id {fpga_id!r}")
-            bitstream = output(raw, "bitstream", location)
+            bitstream = layout.design(task_id, "bit")
             local = fpga_config_path(root, fpga_id)
             roots = toolchain_roots(root, read_toml(local), local) if local.exists() or local.is_symlink() else ()
             programs.append(ProgrammingTarget(task_id, bitstream, roots))
@@ -196,25 +191,17 @@ def _configure(root: Path, command: str, target_id: str | None, toolchain: str |
 
         fpga = public_fpga(fpga_id, location)
         top = required_string(raw, "top-symbol", location, SYMBOL_RE)
-        synthesis = output(raw, "synthesis", location)
+        synthesis = layout.design(task_id, "json")
         if stage == "synthesis":
             programs.append(SynthesisProgram(task_id, fpga, top, synthesis))
             continue
-        implementation = output(raw, "implementation", location)
+        implementation = layout.design(task_id, "fasm")
         constraints = constraint_path(root, directories, config_path, raw, location)
-        if constraints in seen_outputs:
-            raise ConfigError(f"{location}: duplicate output {constraints}")
         if stage == "implementation":
             programs.append(ImplementationProgram(task_id, fpga, top, synthesis, implementation, constraints))
             continue
-        bitstream = output(raw, "bitstream", location)
-        frames = bitstream.with_suffix(".frames")
-        register_output(frames, location)
-        if constraints in (bitstream, frames):
-            raise ConfigError(f"{location}: duplicate output {constraints}")
+        bitstream = layout.design(task_id, "bit")
         programs.append(Program(task_id, fpga, top, synthesis, implementation, constraints, bitstream))
-        cleanup_targets.append(CleanupTarget(task_id, (synthesis, implementation, frames, bitstream),
-                                             root / "build/auxiliary" / f"{task_id}.ys"))
 
     needs_sources = not cleaning and stage != "program"
     return Project(
@@ -222,8 +209,9 @@ def _configure(root: Path, command: str, target_id: str | None, toolchain: str |
         command=command,
         simulation_ids=tuple(key for key, entry in entries.items() if entry[0] == "simulation"),
         program_ids=tuple(key for key, entry in entries.items()
-                          if entry[0] == "project" and toolchain != "vivado"),
+                          if entry[0] == "project"),
         cleanup_targets=tuple(cleanup_targets),
+        xpr=layout.xpr(identifier),
         source_directories=source_directories(root, directories, config_path) if needs_sources else (),
         simulation_directories=source_directories(root, directories, config_path, "simulation") if needs_sources else (),
         fpgas=tuple(fpgas.values()),

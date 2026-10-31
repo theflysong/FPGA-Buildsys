@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
 import io
 import json
@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import main
@@ -61,6 +62,10 @@ def record(name, *args):
         project_file = directory / (current + ".xpr")
     elif name == "add_files":
         sources.setdefault(args[2], []).append(args[3])
+    elif name == "get_runs":
+        return args[0]
+    elif name == "get_property":
+        return "synthesis-flow" if args[1] == "synth_1" else "implementation-flow"
     elif name == "get_filesets":
         return args[0]
     elif name == "get_files":
@@ -70,7 +75,7 @@ def record(name, *args):
     elif name == "create_fileset":
         source_sets[args[1]] = "sources_1"
     elif name == "current_fileset":
-        current_sim = args[1]
+        current_sim = args[-1] if len(args) > 1 else current_sim
     elif name == "delete_fileset":
         if args[0] == current_sim:
             return tcl.call("error", "cannot delete an active fileset")
@@ -95,7 +100,7 @@ def record(name, *args):
 
 for name in ("create_project", "add_files", "get_filesets", "get_files", "set_property",
              "current_project", "create_fileset", "current_fileset", "delete_fileset",
-             "update_compile_order", "close_project"):
+             "update_compile_order", "close_project", "get_runs", "get_property", "create_run", "delete_runs", "current_run"):
     tcl.createcommand(name, lambda *args, name=name: record(name, *args))
 
 address = sys.argv[sys.argv.index("-tclargs") + 1]
@@ -146,13 +151,11 @@ class XprTests(unittest.TestCase):
         self.config = self.root / "configuration.toml"
         self.original = (
             'id = "example"\nname = "Vivado export"\n'
-            '[directories]\nsources = ["src"]\nsimulation = ["sim"]\nconstraints = ["constraints"]\nxpr = "build/xpr"\n'
+            '[directories]\nsources = ["src"]\nsimulation = ["sim"]\nconstraints = ["constraints"]\n'
             '[[fpga]]\nid = "board"\npart = "xc7a35tcsg324-1"\n'
             '[[project]]\nid = "core"\nfpga = "board"\ntop-symbol = "top"\nconstraints = "board.xdc"\n'
-            '[[simulation]]\nid = "first"\ntop-symbol = "tb_first"\ntimescale = "1ns/1ps"\n'
+            '[[simulation]]\nid = "first"\ntop-symbol = "tb_first"\n'
             '[[simulation]]\nid = "second"\ntop-symbol = "tb_second"\ntimescale = "10ns/1ps"\n'
-            '[[xpr]]\nid = "export"\nproject = "core"\nsimulations = ["first", "second"]\n'
-            '[[simulation]]\nid = "unfinished_simulation"\n'
         )
         self.config.write_text(self.original)
         # Keep the launcher's PATH entry free of the project path's semicolon.
@@ -174,272 +177,145 @@ class XprTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(ENTRY), "--project", str(self.root), *args],
                               env=self.env, cwd=self.root.parent, capture_output=True, text=True, timeout=20)
 
-    def test_configuration_is_scoped_and_does_not_create_fpga_settings(self) -> None:
-        self.config.write_text(self.original +
-                               '[[project]]\nid = "unfinished"\n[[xpr]]\nid = "unfinished_export"\nproject = "unfinished"\n')
-        local = self.root / "build/fpga/board.toml"
-        local.parent.mkdir(parents=True)
-        local.write_text("invalid TOML [")
-        project = configure(self.root, "xpr", "export")
-        target, = project.xprs
-        self.assertIsInstance(target, XprProject)
-        self.assertEqual(target.project_id, "core")
-        self.assertEqual(target.xpr, self.root / "build/xpr/export/export.xpr")
-        self.assertEqual([simulation.identifier for simulation in target.simulations], ["first", "second"])
-        self.assertEqual(project.programs, ())
-        self.assertEqual(local.read_text(), "invalid TOML [")
-        self.assertFalse((self.root / "build/xpr").exists())
-        local.unlink()
-        configure(self.root, "xpr", "export")
-        self.assertFalse(local.exists())
-        with self.assertRaisesRegex(ConfigError, "fpga must be a nonempty string"):
+    def fake_export(self):
+        import tkinter
+        namespace = {}
+        with patch.dict(os.environ, XPR_CALLS=str(self.calls)):
+            exec(FAKE_VIVADO[:FAKE_VIVADO.index("address = sys.argv")], namespace)
+        tcl = namespace["tcl"]
+
+        class Vivado:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def __getattr__(self, name):
+                return lambda *args: tcl.eval(name + " " + " ".join(map(str, args)))
+
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.dict(sys.modules, pytcl=SimpleNamespace(Vivado=Vivado, TCLError=tkinter.TclError)), \
+                patch.dict(os.environ, XPR_CALLS=str(self.calls)), \
+                patch("task.vivado.xpr.shutil.which", return_value="vivado"), \
+                redirect_stdout(output), redirect_stderr(errors):
+            result = main.main(["--project", str(self.root), "xpr"])
+        return SimpleNamespace(returncode=result, stdout=output.getvalue(), stderr=errors.getvalue())
+
+    def test_export_configures_all_targets_without_local_fpga_settings(self):
+        project = configure(self.root, "xpr")
+        self.assertEqual(project.xpr, self.root / "build/vivado/example/example.xpr")
+        self.assertEqual([item.identifier for item in project.xprs], ["core"])
+        self.assertEqual([item.identifier for item in project.xpr_simulations], ["first", "second"])
+        self.assertEqual(project.xpr_simulations[0].timescale, "1ns/1ps")
+        self.assertFalse((self.root / "build").exists())
+        self.config.write_text(self.original + '[[project]]\nid="unfinished"\n')
+        with self.assertRaisesRegex(ConfigError, "top-symbol"):
             configure(self.root, "xpr")
 
-    def test_export_validates_directories_references_and_dependencies(self) -> None:
-        cases = (
-            (self.original.replace('xpr = "build/xpr"\n', ''), "directories.xpr"),
-            (self.original.replace('xpr = "build/xpr"', 'xpr = ["build/xpr"]'), "directories.xpr"),
-            (self.original.replace('xpr = "build/xpr"', 'xpr = "../outside"'), "path must stay inside"),
-            (self.original.replace('fpga = "board"', 'fpga = "missing"'), "unknown fpga id"),
-            (self.original.replace('top-symbol = "top"', 'top-symbol = "missing"'), "no exported top-symbol"),
-            (self.original.replace('constraints = "board.xdc"', 'constraints = "missing.xdc"'), "constraints file does not exist"),
-            (self.original.replace('project = "core"', 'project = "missing"'), "unknown project"),
-            (self.original.replace('project = "core"', 'project = "first"'), "unknown project"),
-            (self.original.replace('simulations = ["first", "second"]', 'simulations = ["missing"]'), "unknown simulation"),
-            (self.original.replace('simulations = ["first", "second"]', 'simulations = ["core"]'), "unknown simulation"),
-            (self.original.replace('simulations = ["first", "second"]', 'simulations = "first"'), "list of nonempty strings"),
-            (self.original.replace('simulations = ["first", "second"]', 'simulations = ["first", "first"]'), "duplicate simulation reference"),
+    def test_invalid_inputs_and_legacy_fields(self):
+        for text, message in (
+            (self.original + '[[xpr]]\nid="old"\n', "obsolete"),
+            (self.original.replace('[directories]', '[directories]\nvvp="old"'), "obsolete"),
+            (self.original.replace('id = "first"', 'id = "first"\nvcd="old"'), "obsolete"),
+            (self.original.replace('id = "first"', 'id = "core"'), "duplicate task id"),
+            (self.original.replace('id = "first"', 'id = "../bad"'), "invalid id"),
             (self.original.replace('top-symbol = "tb_first"', 'top-symbol = "missing"'), "no exported top-symbol"),
-            (self.original.replace('timescale = "1ns/1ps"', 'timescale = "invalid"'), "invalid timescale"),
-            (self.original + '[[xpr]]\nid = "export"\nproject = "core"\n', "duplicate xpr id"),
-        )
-        for text, message in cases:
+            (self.original.replace('fpga = "board"', 'fpga = "missing"'), "unknown fpga"),
+            (self.original.replace('constraints = "board.xdc"', 'constraints = "missing.xdc"'), "does not exist"),
+            (self.original.replace('timescale = "10ns/1ps"', 'timescale = "invalid"'), "invalid timescale"),
+        ):
             with self.subTest(message=message):
                 self.config.write_text(text)
                 with self.assertRaisesRegex(ConfigError, message):
-                    configure(self.root, "xpr", "export")
+                    configure(self.root, "xpr")
                 self.assertFalse((self.root / "build").exists())
         self.config.write_text(self.original)
-        with self.assertRaisesRegex(ConfigError, "unknown xpr"):
-            configure(self.root, "xpr", "unfinished_simulation")
-        with self.assertRaisesRegex(ConfigError, "unknown xpr"):
-            configure(self.root, "xpr", "core")
-        (self.root / "src/top.toml").write_text(
-            '[[module.export]]\nname = "top"\n[[module.import]]\nname = "missing"\n'
-        )
+        with self.assertRaisesRegex(ConfigError, "no longer takes"):
+            configure(self.root, "xpr", "old")
+
+    def test_constraints_unique_match_and_ambiguity(self):
+        (self.root / "other").mkdir()
+        self.config.write_text(self.original.replace('["constraints"]', '["other", "constraints"]'))
+        self.assertEqual(configure(self.root, "xpr").xprs[0].constraints,
+                         self.root / "constraints/board.xdc")
+        (self.root / "other/board.xdc").write_text("# duplicate")
+        with self.assertRaisesRegex(ConfigError, "ambiguous constraints"):
+            configure(self.root, "xpr")
+
+    def test_all_target_dependencies_and_directory_roles(self):
+        (self.root / "sim/second.toml").write_text('[[module.export]]\nname="tb_second"\n[[module.import]]\nname="missing"\n')
         with self.assertRaisesRegex(ConfigError, "unresolved import"):
-            configure(self.root, "xpr", "export")
-
-    def test_explicit_xpr_tables_and_project_migration_are_required(self) -> None:
-        self.config.write_text(self.original.replace('[[xpr]]', '[xpr]'))
-        with self.assertRaisesRegex(ConfigError, "must be an array of tables"):
             configure(self.root, "xpr")
-        self.config.write_text(self.original.replace(
-            '[[xpr]]\nid = "export"\nproject = "core"\nsimulations = ["first", "second"]\n', ''
-        ))
-        with self.assertRaisesRegex(ConfigError, r"at least one \[\[xpr\]\]"):
-            configure(self.root, "xpr")
-        self.config.write_text(self.original.replace('[[project]]', '[[program]]'))
-        with self.assertRaisesRegex(ConfigError, r"rename it to \[\[project\]\]"):
-            configure(self.root, "xpr")
-        self.assertFalse((self.root / "build").exists())
-
-    def test_only_referenced_simulation_dependencies_are_required(self) -> None:
-        metadata = self.root / "sim/first.toml"
-        metadata.write_text('[[module.export]]\nname = "tb_first"\n[[module.import]]\nname = "missing"\n')
-        with self.assertRaisesRegex(ConfigError, "unresolved import"):
-            configure(self.root, "xpr", "export")
-        self.config.write_text(self.original.replace('simulations = ["first", "second"]', 'simulations = []'))
-        target, = configure(self.root, "xpr", "export").xprs
-        self.assertEqual(target.simulations, ())
-        self.config.write_text(self.original)
-        metadata.write_text('[[module.export]]\nname = "tb_first"\n[[module.import]]\nname = "helper"\n')
-        (self.root / "src/helper.toml").write_text(
-            '[[module.export]]\nname = "helper"\n[[module.import]]\nname = "tb_first"\n'
-        )
-        with self.assertRaisesRegex(ConfigError, "cyclic source dependency"):
-            configure(self.root, "xpr", "export")
-
-    def test_project_schema_is_used_by_build_program_and_cleanup(self) -> None:
-        select_toolchain(self.root, "yosys")
-        text = self.original.replace('[[simulation]]\nid = "unfinished_simulation"\n', '')
-        text = text.replace('xpr = "build/xpr"\n',
-                            'xpr = "build/xpr"\nvvp = "build/vvp"\nvcd = "build/vcd"\n'
-                            'synthesis = "build/synth"\nimplementation = "build/impl"\nbitstream = "build/bits"\n')
-        text = text.replace('constraints = "board.xdc"\n',
-                            'constraints = "board.xdc"\nsynthesis = "core.json"\n'
-                            'implementation = "core.fasm"\nbitstream = "core.bit"\n')
-        text = text.replace('timescale = "1ns/1ps"\n',
-                            'timescale = "1ns/1ps"\nvvp = "first.vvp"\nvcd = "first.vcd"\n')
-        text = text.replace('timescale = "10ns/1ps"\n',
-                            'timescale = "10ns/1ps"\nvvp = "second.vvp"\nvcd = "second.vcd"\n')
-        self.config.write_text(text)
-        for command in ("synthesis", "implementation", "bitstream", "program"):
-            with self.subTest(command=command):
-                project = configure(self.root, command, "core")
-                self.assertEqual([target.identifier for target in project.programs], ["core"])
-                self.assertEqual(project.xprs, ())
-        for command in ("build", "simulate"):
-            self.assertEqual(configure(self.root, command, "first").simulations[0].top, "tb_first")
-        for command in ("clean", "cleandist"):
-            targets = configure(self.root, command).cleanup_targets
-            self.assertEqual({target.identifier for target in targets}, {"core", "first", "second"})
-        for command in ("auxiliary", "script"):
-            project = configure(self.root, command)
-            self.assertEqual(project.program_ids, ("core",))
-            self.assertEqual(project.xprs, ())
-
-    def test_completion_reads_xpr_ids_independently_of_projects(self) -> None:
-        self.assertEqual(candidate_ids(self.config, "project"), ["core"])
-        self.assertEqual(candidate_ids(self.config, "xpr"), ["export"])
-        self.assertEqual(candidate_ids(self.config, "simulation"), ["first", "second", "unfinished_simulation"])
-
-    def test_missing_dependency_has_an_actionable_error(self) -> None:
-        stderr = io.StringIO()
-        with patch.dict(sys.modules, {"pytcl": None}), redirect_stderr(stderr):
-            result = main.main(["--project", str(self.root), "xpr", "export"])
-        self.assertEqual(result, 1)
-        self.assertIn("pytcl-eda", stderr.getvalue())
-        self.assertIn("requirements.txt", stderr.getvalue())
-        self.assertNotIn("Traceback", stderr.getvalue())
-        self.assertFalse((self.root / "build/xpr").exists())
-        self.assertTrue((self.root / "build/model").exists())
-
-    @unittest.skipUnless(HAS_PYTCL and HAS_TCL, "Install requirements.txt and tkinter for pytcl integration")
-    def test_selected_export_uses_real_pytcl_and_quotes_paths(self) -> None:
-        self.config.write_text(self.original + '[[xpr]]\nid = "unfinished"\nproject = "missing"\n')
-        result = self.cli("xpr", "export")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        xpr = self.root / "build/xpr/export/export.xpr"
-        self.assertTrue(xpr.is_file())
-        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        self.assertEqual(calls[0], ["create_project", "-force", "export", str(xpr.parent),
-                                    "-part", "xc7a35tcsg324-1"])
-        files = [call for call in calls if call[0] == "add_files"]
-        self.assertEqual(files, [
-            ["add_files", "-norecurse", "-fileset", "sources_1", str(self.leaf)],
-            ["add_files", "-norecurse", "-fileset", "sources_1", str(self.root / "src/top.v")],
-            ["add_files", "-norecurse", "-fileset", "sources_1", str(self.root / "src/helper.sv")],
-            ["add_files", "-norecurse", "-fileset", "constrs_1", str(self.root / "constraints/board.xdc")],
-            ["add_files", "-norecurse", "-fileset", "sim_first", str(self.root / "sim/first.v")],
-            ["add_files", "-norecurse", "-fileset", "sim_second", str(self.root / "sim/second.v")],
-        ])
-        self.assertIn(["set_property", "top", "top", "sources_1"], calls)
-        self.assertIn(["set_property", "target_language", "Verilog", "export"], calls)
-        for simulation, top, timescale in (("first", "tb_first", "1ns/1ps"), ("second", "tb_second", "10ns/1ps")):
-            fileset = f"sim_{simulation}"
-            self.assertIn(["create_fileset", "-simset", fileset], calls)
-            self.assertIn(["set_property", "SOURCE_SET", "sources_1", fileset], calls)
-            self.assertIn(["set_property", "top", top, fileset], calls)
-            self.assertIn(["set_property", "xsim.elaborate.timescale", timescale, fileset], calls)
-            self.assertIn(["update_compile_order", "-fileset", fileset], calls)
-        self.assertIn(["current_fileset", "-simset", "sim_first"], calls)
-        self.assertLess(calls.index(["current_fileset", "-simset", "sim_first"]),
-                        calls.index(["delete_fileset", "sim_1"]))
-        file_sets = json.loads(xpr.read_text())
-        self.assertNotIn("sim_1", file_sets)
-        self.assertEqual(file_sets["sim_second"], [str(self.root / "sim/second.v")])
-        self.assertIn(str(self.root / "src/helper.sv"), file_sets["sources_1"])
-        self.assertIn(str(self.leaf), file_sets["compile"]["sim_second"])
-        self.assertTrue(any(call[:3] == ["set_property", "file_type", "SystemVerilog"] for call in calls))
-        self.assertEqual(calls[-1], ["close_project"])
-        self.assertFalse((self.root / "build/fpga").exists())
-        self.assertFalse((self.root / "build/auxiliary").exists())
-        self.assertFalse((self.root / "jobs.sh").exists())
-        before = xpr.read_bytes(), xpr.stat().st_mtime_ns
-        failed = self.cli("xpr")
-        self.assertNotEqual(failed.returncode, 0)
-        self.assertEqual((xpr.read_bytes(), xpr.stat().st_mtime_ns), before)
-
-    @unittest.skipUnless(HAS_PYTCL and HAS_TCL, "Install requirements.txt and tkinter for pytcl integration")
-    def test_simulation_top_from_sources_stays_in_design_fileset(self) -> None:
-        self.config.write_text(self.original
-                               .replace('top-symbol = "tb_first"', 'top-symbol = "top"')
-                               .replace('simulations = ["first", "second"]', 'simulations = ["first"]'))
-        result = self.cli("xpr", "export")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        self.assertIn(["set_property", "top", "top", "sim_first"], calls)
-        self.assertFalse(any(call[:4] == ["add_files", "-norecurse", "-fileset", "sim_first"] for call in calls))
-        file_sets = json.loads((self.root / "build/xpr/export/export.xpr").read_text())
-        self.assertEqual(file_sets["compile"]["sim_first"], [str(self.leaf), str(self.root / "src/top.v")])
-
-    @unittest.skipUnless(HAS_PYTCL and HAS_TCL, "Install requirements.txt and tkinter for pytcl integration")
-    def test_design_only_export_does_not_inherit_design_into_simulation(self) -> None:
-        self.config.write_text(self.original.replace('simulations = ["first", "second"]', 'simulations = []'))
-        result = self.cli("xpr", "export")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        file_sets = json.loads((self.root / "build/xpr/export/export.xpr").read_text())
-        self.assertEqual(file_sets["sim_1"], [])
-        self.assertEqual(file_sets["compile"]["sim_1"], [])
-
-    @unittest.skipUnless(HAS_PYTCL and HAS_TCL, "Install requirements.txt and tkinter for pytcl integration")
-    def test_directory_roles_include_simulation_only_design_dependencies(self) -> None:
-        (self.root / "src/only_sim.sv").write_text("module only_sim; endmodule\n")
-        (self.root / "src/only_sim.toml").write_text('[[module.export]]\nname = "only_sim"\n')
-        (self.root / "src/helper.toml").write_text(
-            '[[module.export]]\nname = "helper"\n[[module.import]]\nname = "only_sim"\n'
-        )
-        (self.root / "sim/first.toml").write_text(
-            '[[module.export]]\nname = "tb_first"\n[[module.import]]\nname = "helper"\n'
-        )
-        result = self.cli("xpr", "export")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        file_sets = json.loads((self.root / "build/xpr/export/export.xpr").read_text())
-        self.assertEqual(set(file_sets["sources_1"]), {
-            str(self.leaf), str(self.root / "src/top.v"), str(self.root / "src/helper.sv"),
-            str(self.root / "src/only_sim.sv"),
-        })
-        self.assertEqual(file_sets["sim_first"], [str(self.root / "sim/first.v")])
-        self.assertEqual(file_sets["sim_second"], [str(self.root / "sim/second.v")])
-        for fileset in ("sim_first", "sim_second"):
-            self.assertNotIn(str(self.root / "src/top.v"), file_sets["compile"][fileset])
-        self.assertIn(str(self.root / "src/only_sim.sv"), file_sets["compile"]["sim_first"])
-        self.assertIn(str(self.leaf), file_sets["compile"]["sim_second"])
-
-    def test_design_cannot_depend_on_simulation_directory(self) -> None:
-        (self.root / "src/top.toml").write_text(
-            '[[module.export]]\nname = "top"\n[[module.import]]\nname = "tb_second"\n'
-        )
+        (self.root / "sim/second.toml").write_text('[[module.export]]\nname="tb_second"\n')
+        (self.root / "src/top.toml").write_text('[[module.export]]\nname="top"\n[[module.import]]\nname="tb_second"\n')
         with self.assertRaisesRegex(ConfigError, "directories.simulation"):
-            configure(self.root, "xpr", "export")
-        self.assertFalse((self.root / "build").exists())
+            configure(self.root, "xpr")
 
-    @unittest.skipUnless(HAS_PYTCL and HAS_TCL, "Install requirements.txt and tkinter for pytcl integration")
-    def test_default_exports_all_xprs_and_regenerates_projects(self) -> None:
-        self.config.write_text(self.original + (
-            '[[fpga]]\nid = "other"\npart = "xc7a100tcsg324-1"\n'
-            '[[project]]\nid = "other_core"\nfpga = "other"\ntop-symbol = "leaf"\nconstraints = "board.xdc"\n'
-            '[[xpr]]\nid = "other_export"\nproject = "other_core"\n'
-            '[[xpr]]\nid = "core"\nproject = "core"\nsimulations = []\n'
-        ))
+    @unittest.skipUnless(HAS_TCL, "Requires Tcl")
+    def test_single_export_multiple_parts_and_independent_simulation_closures(self):
+        self.config.write_text(self.original + '[[fpga]]\nid="large"\npart="xc7a100tcsg324-1"\n'
+                               '[[project]]\nid="other"\nfpga="large"\ntop-symbol="leaf"\nconstraints="board.xdc"\n')
         for _ in range(2):
-            result = self.cli("xpr")
-            self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.root / "build/xpr/export/export.xpr").is_file())
-        self.assertTrue((self.root / "build/xpr/other_export/other_export.xpr").is_file())
-        self.assertTrue((self.root / "build/xpr/core/core.xpr").is_file())
+            result = self.fake_export()
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout.count("The path of xpr:"), 1)
+        path = self.root / "build/vivado/example/example.xpr"
+        filesets = json.loads(path.read_text())
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        creates = [call for call in calls if call[0] == "create_project"]
-        self.assertEqual([call[2] for call in creates], ["export", "other_export", "core"] * 2)
-        self.assertEqual(creates[1][-1], "xc7a100tcsg324-1")
+        self.assertEqual(len([row for row in calls if row[0] == "create_project"]), 2)
+        self.assertIn(["create_project", "-force", "example", str(path.parent), "-part", "xc7a35tcsg324-1"], calls)
+        self.assertEqual(filesets["src_core"], [str(self.leaf), str(self.root / "src/top.v")])
+        self.assertEqual(filesets["src_other"], [str(self.leaf)])
+        self.assertEqual(set(filesets["sim_first"]), {str(self.leaf), str(self.root / "src/top.v"),
+                                                    str(self.root / "src/helper.sv"), str(self.root / "sim/first.v")})
+        self.assertEqual(filesets["sim_second"], [str(self.leaf), str(self.root / "sim/second.v")])
+        for identifier, part in (("core", "xc7a35tcsg324-1"), ("other", "xc7a100tcsg324-1")):
+            self.assertIn(["create_run", "synth_" + identifier, "-flow", "synthesis-flow", "-srcset", "src_" + identifier,
+                           "-constrset", "constrs_" + identifier, "-part", part], calls)
+            self.assertIn(["create_run", "impl_" + identifier, "-flow", "implementation-flow", "-parent_run", "synth_" + identifier,
+                           "-constrset", "constrs_" + identifier, "-part", part], calls)
+        self.assertIn(["current_run", "-synthesis", "synth_core"], calls)
+        self.assertIn(["current_fileset", "-simset", "sim_first"], calls)
+        self.assertFalse((self.root / "build/fpga").exists())
+        self.assertFalse((self.root / "jobs.sh").exists())
 
-    @unittest.skipUnless(HAS_PYTCL and HAS_TCL, "Install requirements.txt and tkinter for pytcl integration")
-    def test_missing_vivado_and_tcl_errors_are_reported(self) -> None:
-        self.vivado.rename(self.tools / "vivado.disabled")
-        with patch("task.vivado.xpr.shutil.which", return_value=None):
-            stderr = io.StringIO()
-            with redirect_stderr(stderr):
-                result = main.main(["--project", str(self.root), "xpr", "export"])
+    @unittest.skipUnless(HAS_TCL, "Requires Tcl")
+    def test_design_only_and_simulation_only_export(self):
+        for only in ("design", "simulation"):
+            with self.subTest(only=only):
+                text = self.original
+                if only == "design":
+                    text = text[:text.index("[[simulation]]")]
+                else:
+                    a=text.index("[[fpga]]");b=text.index("[[simulation]]")
+                    text=text[:a]+text[b:]
+                self.config.write_text(text)
+                self.calls.unlink(missing_ok=True)
+                result = self.fake_export()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+                create = next(row for row in calls if row[0] == "create_project")
+                self.assertEqual("-part" in create, only == "design")
+                if only == "simulation":
+                    self.assertFalse(any(row[0] == "create_run" for row in calls))
+
+    @unittest.skipUnless(HAS_PYTCL and HAS_TCL, "Requires pytcl and Tcl")
+    def test_cli_transport_uses_real_pytcl_with_fake_vivado(self):
+        result = self.cli("xpr")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.root / "build/vivado/example/example.xpr").is_file())
+
+    def test_missing_dependency_and_tool_errors(self):
+        error = io.StringIO()
+        with patch.dict(sys.modules, {"pytcl": None}), redirect_stderr(error):
+            result = main.main(["--project", str(self.root), "xpr"])
         self.assertEqual(result, 1)
-        self.assertIn("Missing tool: vivado", stderr.getvalue())
-        self.assertFalse((self.root / "build/xpr").exists())
-        (self.tools / "vivado.disabled").rename(self.vivado)
-        self.env["XPR_FAIL"] = "add_files"
-        failed = self.cli("xpr", "export")
-        self.assertNotEqual(failed.returncode, 0)
-        self.assertIn("non-zero status", failed.stderr)
-        self.assertNotIn("Traceback", failed.stderr)
+        self.assertIn("pytcl-eda", error.getvalue())
+        self.assertNotIn("Traceback", error.getvalue())
 
 
 if __name__ == "__main__":

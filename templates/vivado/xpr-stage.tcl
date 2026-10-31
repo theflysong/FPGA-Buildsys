@@ -1,6 +1,8 @@
 namespace eval buildsys {}
 set ::buildsys::xpr $(xpr)
 set ::buildsys::stage $(stage)
+set ::buildsys::target_kind $(target_kind)
+set ::buildsys::simulation_directory $(simulation_directory)
 set ::buildsys::synthesis_run $(synthesis_run)
 set ::buildsys::implementation_run $(implementation_run)
 set ::buildsys::fileset $(fileset)
@@ -21,7 +23,7 @@ namespace eval buildsys {
 proc buildsys::run_object {name} {
     set objects [get_runs -quiet $name]
     if {[llength $objects] != 1} {
-        error "Expected Vivado run '$name' in the exported project; re-export the XPR if its runs were removed"
+        error "Expected Vivado run '$name' in the exported project; run buildsys xpr to re-export"
     }
     return [lindex $objects 0]
 }
@@ -81,7 +83,7 @@ proc buildsys::find_bitstream {} {
     if {$directory ne "" && [file isdirectory $directory]} {
         set candidates [lsort [glob -nocomplain -directory $directory *.bit]]
         # Prefer the active design top when several files remain in a run dir.
-        set top [get_property TOP [get_filesets sources_1]]
+        set top [get_property TOP [get_filesets [get_property SRCSET $object]]]
         set preferred [file join $directory "${top}.bit"]
         if {[file isfile $preferred]} { return [file normalize $preferred] }
         foreach candidate $candidates {
@@ -106,19 +108,47 @@ proc buildsys::existing_bitstream {} {
 proc buildsys::simulate {} {
     variable fileset
     variable simulation_open
+    variable simulation_directory
     set objects [get_filesets -quiet $fileset]
     if {[llength $objects] != 1} {
-        error "Simulation fileset '$fileset' is missing from this XPR; explicitly re-export the project"
+        error "Simulation fileset '$fileset' is missing from this XPR; run buildsys xpr to re-export"
     }
     set object [lindex $objects 0]
+    current_fileset -simset $object
     # Vivado 2018.3 supports behavioral, post-synthesis, post-implementation;
     # 'batch' is a Vivado process mode, not a launch_simulation mode.
     set_property xsim.simulate.runtime all $object
     set_property xsim.simulate.log_all_signals true $object
+    foreach path [glob -nocomplain -directory $simulation_directory *.vcd] { file delete $path }
     set simulation_open 1
     launch_simulation -mode behavioral -simset $object
     close_sim
     set simulation_open 0
+    report_directory simulation $simulation_directory
+}
+
+proc buildsys::report_directory {kind directory} {
+    if {![file isdirectory $directory]} { return }
+    puts "BUILDSYS_ARTIFACT $kind [file normalize $directory]"
+    foreach extension {dcp wdb vcd} {
+        foreach path [lsort [glob -nocomplain -directory $directory *.$extension]] {
+            puts "BUILDSYS_ARTIFACT $extension [file normalize $path]"
+        }
+    }
+}
+
+proc buildsys::clean {} {
+    variable target_kind
+    variable fileset
+    variable synthesis_run
+    variable implementation_run
+    if {$target_kind eq "simulation"} {
+        if {[llength [get_filesets -quiet $fileset]]} { reset_simulation -mode behavioral -simset $fileset }
+    } else {
+        foreach run [list $implementation_run $synthesis_run] {
+            if {[llength [get_runs -quiet $run]]} { reset_run $run }
+        }
+    }
 }
 
 proc buildsys::program {bitstream} {
@@ -171,7 +201,20 @@ proc buildsys::perform {} {
     variable stage
     variable synthesis_run
     variable implementation_run
+    variable fileset
+    if {$stage ni {simulation clean}} {
+        run_object $synthesis_run
+        run_object $implementation_run
+        if {[llength [get_filesets -quiet $fileset]] != 1 ||
+            [get_property SRCSET [run_object $synthesis_run]] ne $fileset ||
+            [get_property SRCSET [run_object $implementation_run]] ne $fileset} {
+            error "Target source fileset is missing or its runs changed; run buildsys xpr to re-export"
+        }
+        current_run -synthesis [run_object $synthesis_run]
+        current_run -implementation [run_object $implementation_run]
+    }
     switch -- $stage {
+        clean { clean }
         simulation { simulate }
         synthesis { ensure_run $synthesis_run synthesis }
         implementation {
@@ -191,6 +234,16 @@ proc buildsys::perform {} {
             program $bitstream
         }
         default { error "Unknown XPR stage '$stage'" }
+    }
+    if {$stage in {synthesis implementation bitstream}} {
+        report_directory synthesis [get_property DIRECTORY [run_object $synthesis_run]]
+    }
+    if {$stage in {implementation bitstream}} {
+        report_directory implementation [get_property DIRECTORY [run_object $implementation_run]]
+        set constraints [get_property CONSTRSET [run_object $implementation_run]]
+        foreach path [get_files -of_objects [get_filesets $constraints]] {
+            if {[file isfile $path]} { puts "BUILDSYS_ARTIFACT constraints [file normalize $path]" }
+        }
     }
 }
 

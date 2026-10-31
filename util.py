@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import re
 import shlex
@@ -66,16 +67,6 @@ def project_path(root: Path, value: str, location: str) -> Path:
 def external_path(root: Path, value: str) -> Path:
     path = Path(value).expanduser()
     return (root / path).resolve() if not path.is_absolute() else path.resolve()
-
-
-def output_directory(root: Path, directories: dict, key: str, location: str) -> Path:
-    value = directories.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise ConfigError(
-            f'{location}: directories.{key} must be a nonempty path string; '
-            f'use {key} = "build/{key}"'
-        )
-    return project_path(root, value, f"{location}: directories.{key}")
 
 
 def output_name(value: str, location: str) -> str:
@@ -234,4 +225,5 @@ def execute_job(project: Project, command: str, target_id: str | None,
         if target_id is not None:
             args.append(target_id)
         args.extend(task_args)
-    subprocess.run(args, cwd=project.root, check=True)
+    subprocess.run(args, cwd=project.root, check=True,
+                   env=dict(os.environ, BUILDSYS_REPORT_SUPPRESS="1"))

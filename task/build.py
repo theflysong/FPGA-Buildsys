@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import shlex
+from artifacts import shell_report, target_artifacts
 
 from models import Project, Simulation
 from util import (
@@ -21,7 +22,8 @@ def generate_script(project: Project, simulation: Simulation) -> None:
     write_template(job_dir / "build.sh", "build.sh", executable=True,
                    header="\n".join(task_header(project)), filelist=shlex.quote(filelist),
                    vvp_file=shlex.quote(vvp_file), vcd_file=shlex.quote(vcd_file),
-                   top=shlex.quote(simulation.top))
+                   top=shlex.quote(simulation.top),
+                   report=shell_report(project, target_artifacts(simulation, waveforms=False)))
 
 
 def execute(project: Project, target_id: str | None,

@@ -16,6 +16,7 @@ ENTRY = Path(__file__).resolve().parents[1] / "main.py"
 HEADER = "Bus device vid:pid       probe type      manufacturer serial               product"
 
 
+@unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm; native Vivado programming is tested separately")
 class ProgrammingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="buildsys programming ")
@@ -28,14 +29,7 @@ class ProgrammingTests(unittest.TestCase):
         (self.root / "src/top.v").write_text("module top; endmodule\n")
         (self.root / "src/top.toml").write_text('[[module.export]]\nname = "top"\n')
         (self.root / "configuration.toml").write_text(
-            'name = "Programming test"\nid = "example"\n'
-            '[directories]\nsources = ["src"]\nconstraints = ["constraints"]\n'
-            'synthesis = "build/synth"\nimplementation = "build/impl"\n'
-            'bitstream = "build/bits"\n'
-            '[[fpga]]\nid = "ego1"\npart = "xc7a35tcsg324-1"\n'
-            '[[project]]\nid = "coreprog"\nfpga = "ego1"\ntop-symbol = "top"\n'
-            'synthesis = "core.json"\nimplementation = "core.fasm"\n'
-            'bitstream = "core image.bit"\nconstraints = "board.xdc"\n'
+            'name = "Programming test"\nid = "example"\n[directories]\nsources = ["src"]\nconstraints = ["constraints"]\n[[fpga]]\nid = "ego1"\npart = "xc7a35tcsg324-1"\n[[project]]\nid = "coreprog"\nfpga = "ego1"\ntop-symbol = "top"\nconstraints = "board.xdc"\n'
         )
         self.tool_dir = self.root / "tools"
         self.tool_dir.mkdir()
@@ -67,7 +61,7 @@ sys.exit(3)
         self.scan([(1, 2, "0403:6010", "SERIAL_A", "ft2232")])
         generated = self.cli("script")
         self.assertEqual(generated.returncode, 0, generated.stderr)
-        self.bitstream = self.root / "build/bits/core image.bit"
+        self.bitstream = self.root / "build/yosys/coreprog/coreprog.bit"
         self.bitstream.parent.mkdir(parents=True)
         self.bitstream.write_bytes(b"test bitstream")
 
@@ -123,7 +117,7 @@ sys.exit(3)
         self.assertEqual(auxiliary.stat().st_mtime_ns, before)
         base = ["-c", "ft2232", "--busdev-num", "1:2"]
         self.assertEqual(self.calls(), [["--scan-usb"], ["--list-cables"],
-                                       [*base, "--detect"], [*base, "-m", "build/bits/core image.bit"]])
+                                       [*base, "--detect"], [*base, "-m", "build/yosys/coreprog/coreprog.bit"]])
         for path in (self.root / "build/jobs").rglob("*.sh"):
             self.assertEqual(subprocess.run(["bash", "-n", str(path)]).returncode, 0)
 
@@ -133,9 +127,9 @@ sys.exit(3)
         config = self.root / "configuration.toml"
         config.write_text(
             'name = "Programming only"\nid = "example"\n'
-            '[directories]\nbitstream = "build/bits"\n'
+            '[directories]\n'
             '[[fpga]]\nid = "ego1"\n'
-            '[[project]]\nid = "coreprog"\nfpga = "ego1"\nbitstream = "core image.bit"\n'
+            '[[project]]\nid = "coreprog"\nfpga = "ego1"\n'
             '[[simulation]]\nid = "unfinished"\n'
         )
         local = self.root / "build/fpga/ego1.toml"

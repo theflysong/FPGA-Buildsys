@@ -12,11 +12,10 @@ from . import build, clean, cleandist, simulate
 def generate_script(project: Project) -> None:
     simulation_cases = "|".join(project.simulation_ids)
     program_cases = "|".join(project.program_ids)
-    target_cases = "|".join(("_project", *project.simulation_ids, *project.program_ids))
     write_template(
         project.script, "dispatcher.sh", executable=True,
         toolchains=shlex.quote(str(BUILDSYS_DIR / "toolchains.py")),
-        main=shlex.quote(str(BUILDSYS_DIR / "main.py")), target_cases=target_cases,
+        main=shlex.quote(str(BUILDSYS_DIR / "main.py")),
         simulation_cases=f"      {simulation_cases}) ;;" if simulation_cases else "",
         program_cases=f"      {program_cases}) ;;" if program_cases else "",
     )

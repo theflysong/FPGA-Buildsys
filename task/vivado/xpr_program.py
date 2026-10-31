@@ -11,7 +11,7 @@ __doc__ = "Program an existing XPR bitstream through Vivado Hardware Manager."
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("target_id", metavar="xpr-id")
+    parser.add_argument("target_id", metavar="project-id")
     parser.add_argument("--hw-server", default="localhost:3121", metavar="URL",
                         help="Vivado Hardware Server URL (default: localhost:3121)")
     parser.add_argument("--device", metavar="GLOB",

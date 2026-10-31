@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import shlex
+from artifacts import shell_report, target_artifacts
 
 from models import ImplementationProgram, Project
 from util import (
@@ -28,6 +29,7 @@ def generate_script(project: Project, program: ImplementationProgram) -> None:
         program_id=program.identifier, synthesis=shlex.quote(synthesis),
         constraints_option=shlex.quote("xdc=" + constraints),
         implementation_option=shlex.quote("fasm=" + implementation),
+        report=shell_report(project, target_artifacts(program, stage="implementation")),
     )
 
 

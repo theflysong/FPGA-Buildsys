@@ -24,8 +24,8 @@ class Planner:
         "yosys-synthesis": ("configure", "model", "auxiliary generation", "script generation", "script execution"),
         "yosys-implementation": ("configure", "model", "auxiliary generation", "script generation", "script execution"),
         "yosys-bitstream": ("configure", "model", "auxiliary generation", "script generation", "script execution"),
-        "clean": ("configure", "script generation", "script execution"),
-        "cleandist": ("configure", "script generation", "script execution"),
+        "clean": ("configure", "cleanup execution"),
+        "cleandist": ("configure", "cleanup execution"),
         "yosys-program": ("configure", "script generation", "script execution"),
         "xpr": ("configure", "model", "xpr generation"),
         "xpr-simulation": ("configure", "xpr stage execution"),
@@ -68,3 +68,6 @@ class Planner:
                 result = workflow.execute(project, target_id, task_args, temporary_script)
                 if isinstance(result, Project):
                     project = result
+        assert project is not None
+        from artifacts import report_project
+        report_project(project, target_id)

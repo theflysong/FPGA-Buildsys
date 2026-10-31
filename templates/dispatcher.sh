@@ -3,7 +3,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_ROOT"
 usage() {
-  printf '%s\n' 'Usage: jobs.sh <build|simulate> <simulation-id>' '       jobs.sh [yosys-]<synthesis|implementation|bitstream|program> <id> [options]' '       jobs.sh <clean|cleandist> [id]' 'FPGA stages use the selected toolchain; program options match buildsys program --help.' >&2
+  printf '%s\n' 'Usage: jobs.sh <build|simulate|xpr-simulation> <simulation-id>' '       jobs.sh [yosys-|xpr-]<synthesis|implementation|bitstream|program> <project-id> [options]' '       jobs.sh xpr' '       jobs.sh <clean|cleandist> [id]' 'FPGA stages use the selected toolchain; program options match buildsys program --help.' >&2
   exit 2
 }
 [[ "$#" -ge 1 ]] || usage
@@ -15,21 +15,19 @@ case "$command" in
     ;;
 esac
 case "$command" in
-  xpr-synthesis|xpr-implementation|xpr-bitstream|xpr-program)
+  xpr)
+    [[ "$#" -eq 0 ]] || usage
+    exec python3 $(main) --project . xpr
+    ;;
+  clean|cleandist)
+    exec python3 $(main) --project . "$command" "$@"
+    ;;
+  xpr-simulation|xpr-synthesis|xpr-implementation|xpr-bitstream|xpr-program)
     exec python3 $(main) --project . "$command" "$@"
     ;;
   yosys-synthesis|yosys-implementation|yosys-bitstream|yosys-program) command=${command#yosys-} ;;
 esac
 case "$command" in
-  clean|cleandist)
-    [[ "$#" -le 1 ]] || usage
-    target=${1:-_project}
-    case "$target" in
-      $(target_cases)) ;;
-      *) printf "Unknown target id: %s\n" "$target" >&2; exit 2 ;;
-    esac
-    [[ "$#" -eq 0 ]] || shift
-    ;;
   build|simulate)
     [[ "$#" -eq 1 ]] || usage
     target=$1

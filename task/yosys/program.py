@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import shlex
+from artifacts import shell_report, target_artifacts
 
 from models import ProgrammingTarget, Project
 from util import (
@@ -21,7 +22,7 @@ def generate_script(project: Project, program: ProgrammingTarget) -> None:
     bitstream = relative(project, program.bitstream)
     write_template(job_dir / "program.sh", "program.sh", executable=True,
                    header="\n".join(header), program_id=shlex.quote(program.identifier),
-                   bitstream=shlex.quote(bitstream))
+                   bitstream=shlex.quote(bitstream), report=shell_report(project, target_artifacts(program)))
 
 
 def execute(project: Project, target_id: str | None,

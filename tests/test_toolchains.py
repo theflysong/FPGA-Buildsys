@@ -29,40 +29,7 @@ class ToolchainTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.config = self.root / "configuration.toml"
-        self.original = '''name = "Mixed project"
-id = "example"
-[directories]
-sources = ["src"]
-simulation = ["sim"]
-constraints = ["constraints"]
-vvp = "build/vvp"
-vcd = "build/vcd"
-synthesis = "build/synth"
-implementation = "build/impl"
-bitstream = "build/bits"
-xpr = "build/xpr"
-[[simulation]]
-id = "test"
-top-symbol = "tb"
-timescale = "1ns/1ps"
-vvp = "test.vvp"
-vcd = "test.vcd"
-[[fpga]]
-id = "board"
-part = "xc7a35tcsg324-1"
-[[project]]
-id = "core"
-fpga = "board"
-top-symbol = "top"
-constraints = "board.xdc"
-synthesis = "core.json"
-implementation = "core.fasm"
-bitstream = "core.bit"
-[[xpr]]
-id = "export"
-project = "core"
-simulations = ["test"]
-'''
+        self.original = 'name = "Mixed project"\nid = "example"\n[directories]\nsources = ["src"]\nsimulation = ["sim"]\nconstraints = ["constraints"]\n[[simulation]]\nid = "test"\ntop-symbol = "tb"\ntimescale = "1ns/1ps"\n[[fpga]]\nid = "board"\npart = "xc7a35tcsg324-1"\n[[project]]\nid = "core"\nfpga = "board"\ntop-symbol = "top"\nconstraints = "board.xdc"\n'
         self.config.write_text(self.original, encoding="utf-8")
         for directory in ("src", "sim", "constraints"):
             (self.root / directory).mkdir()
@@ -97,7 +64,7 @@ simulations = ["test"]
         for arguments in (
             ("toolchain",), ("auxiliary",), ("script",), ("synthesis", "core"),
             ("implementation", "core"), ("bitstream", "core"),
-            ("program", "core", "--protocol", "ft2232"), ("xpr", "export"),
+            ("program", "core", "--protocol", "ft2232"), ("xpr",),
             *((f"yosys-{stage}", "core") for stage in STAGES if stage != "program"),
             ("yosys-program", "core", "--protocol", "ft2232"),
             *((f"xpr-{stage}", "export") for stage in (
@@ -138,7 +105,7 @@ simulations = ["test"]
 
     def test_wrong_backend_never_generates_or_starts_a_task(self) -> None:
         for name, arguments, expected in (
-            ("yosys", ("xpr", "export"), "vivado"),
+            ("yosys", ("xpr",), "vivado"),
             ("yosys", ("xpr-synthesis", "export"), "vivado"),
             ("vivado", ("yosys-synthesis", "core"), "yosys"),
             ("vivado", ("yosys-program", "core", "--protocol", "ft2232"), "yosys"),
@@ -179,7 +146,7 @@ simulations = ["test"]
         for path in ("build/jobs/core/synthesis.sh", "build/jobs/core/program.sh",
                      "build/auxiliary/core.ys", "build/auxiliary/test.f", "build/fpga/board.toml"):
             self.assertTrue((self.root / path).is_file(), path)
-        bitstream = self.root / "build/bits/core.bit"
+        bitstream = self.root / "build/yosys/core/core.bit"
         bitstream.parent.mkdir(parents=True)
         bitstream.write_bytes(b"keep")
         before = {path: path.read_bytes() for path in (self.root / "build").rglob("*") if path.is_file()}
@@ -198,7 +165,7 @@ simulations = ["test"]
         self.assertTrue((self.root / "build/auxiliary/test.f").is_file())
         self.assertTrue((self.root / "build/jobs/test/build.sh").is_file())
         self.assertFalse((self.root / "build/auxiliary/core.ys").exists())
-        self.assertFalse((self.root / "build/jobs/core").exists())
+        self.assertFalse((self.root / "build/jobs/core/synthesis.sh").exists())
         self.assertFalse((self.root / "build/fpga").exists())
         self.assertFalse((self.root / "build/xpr").exists())
 

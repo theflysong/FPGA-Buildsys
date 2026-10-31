@@ -31,35 +31,13 @@ def candidate_ids(path: Path, kind: str) -> list[str]:
     return result
 
 
-def xpr_simulation_ids(path: Path, xpr_id: str) -> list[str]:
-    """Return simulations explicitly selected by one XPR table."""
-    try:
-        with path.open("rb") as stream:
-            data = tomllib.load(stream)
-    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
-        return []
-    xprs = data.get("xpr", [])
-    if not isinstance(xprs, list):
-        return []
-    selected = None
-    for entry in xprs:
-        if isinstance(entry, dict) and entry.get("id") == xpr_id:
-            selected = entry.get("simulations", [])
-            break
-    if not isinstance(selected, list):
-        return []
-    result: list[str] = []
-    for identifier in selected:
-        if isinstance(identifier, str) and ID_RE.fullmatch(identifier) and identifier not in result:
-            result.append(identifier)
-    return result
+def xpr_simulation_ids(path: Path) -> list[str]:
+    """Return all simulation ids available in the shared Vivado project."""
+    return candidate_ids(path, "simulation")
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) == 3 and argv[1] == "xpr-simulation":
-        for identifier in xpr_simulation_ids(Path(argv[0]), argv[2]):
-            print(identifier)
-    elif len(argv) == 2 and argv[1] in {"simulation", "project", "xpr"}:
+    if len(argv) == 2 and argv[1] in {"simulation", "project"}:
         for identifier in candidate_ids(Path(argv[0]), argv[1]):
             print(identifier)
     return 0

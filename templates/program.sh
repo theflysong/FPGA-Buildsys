@@ -110,3 +110,4 @@ loader_args=(-c "$protocol" --busdev-num "${matches[0]}")
 [[ -z "$serial" ]] || loader_args+=(--ftdi-serial "$serial")
 openFPGALoader "${loader_args[@]}" --detect 2>&1 | tee -a "$program_log"
 openFPGALoader "${loader_args[@]}" -m "$BITSTREAM" 2>&1 | tee -a "$program_log"
+$(report)

@@ -5,12 +5,8 @@ id = "example_simulation"
 constraints = ["src/constraints/"]
 sources = ["src/modules/"]
 simulation = ["sim/"]
-vvp = "build/sim"
-vcd = "build/sim"
 
 [[simulation]]
 id = "structural_hw"
 top-symbol = "tb_shw"
 timescale = "1ns/1ps"
-vvp = "structural_hw.vvp"
-vcd = "structural_hw.vcd"

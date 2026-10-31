@@ -30,10 +30,7 @@ class BuildSystemTests(unittest.TestCase):
         select_toolchain(self.root, "yosys")
         (self.root / "src").mkdir()
         (self.root / "configuration.toml").write_text(
-            'name = "Example"\nid = "example"\n'
-            '[directories]\nsources = ["src"]\nvvp = "build/vvp"\nvcd = "build/vcd"\n'
-            '[[simulation]]\nid = "demo"\ntop-symbol = "tb"\ntimescale = "1ns/1ps"\n'
-            'vvp = "demo.vvp"\nvcd = "demo.vcd"\n'
+            'name = "Example"\nid = "example"\n[directories]\nsources = ["src"]\n[[simulation]]\nid = "demo"\ntop-symbol = "tb"\ntimescale = "1ns/1ps"\n'
         )
         (self.root / "src/core.v").write_text("module core; endmodule\n")
         (self.root / "src/core.toml").write_text('[[module.export]]\nname = "core"\n')
@@ -54,15 +51,15 @@ class BuildSystemTests(unittest.TestCase):
 
     def dispatch(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [str(self.root / "jobs.sh"), *args],
+            [*( ["C:/Program Files/Git/bin/bash.exe"] if os.name == "nt" else []), str(self.root / "jobs.sh"), *args],
+            env=dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]),
             capture_output=True, text=True, check=False,
         )
 
     def add_second_simulation(self) -> None:
         with (self.root / "configuration.toml").open("a") as stream:
             stream.write(
-                '[[simulation]]\nid = "second"\ntop-symbol = "tb_second"\n'
-                'timescale = "1ns/1ps"\nvvp = "second.vvp"\nvcd = "second.vcd"\n'
+                '[[simulation]]\nid = "second"\ntop-symbol = "tb_second"\ntimescale = "1ns/1ps"\n'
             )
         (self.root / "src/second.v").write_text(
             '`ifndef __VCD_FILE__\n`define __VCD_FILE__ "second.vcd"\n`endif\n'
@@ -76,23 +73,15 @@ class BuildSystemTests(unittest.TestCase):
     def add_program(self, *, mixed: bool = False) -> str:
         name = "prog_demo" if mixed else "coreprog"
         config = (
-            'name = "FPGA example"\nid = "example"\n'
-            '[directories]\nsources = ["src"]\n'
-            'constraints = ["constraints"]\nsynthesis = "build/synth"\n'
-            'implementation = "build/impl"\nbitstream = "build/bits"\n'
+            'name = "FPGA example"\nid = "example"\n[directories]\nsources = ["src"]\nconstraints = ["constraints"]\n'
         )
         if mixed:
             config += (
-                'vvp = "build/vvp"\nvcd = "build/vcd"\n'
-                '[[simulation]]\nid = "demo"\ntop-symbol = "tb"\n'
-                'timescale = "1ns/1ps"\nvvp = "demo.vvp"\nvcd = "demo.vcd"\n'
+                '[[simulation]]\nid = "demo"\ntop-symbol = "tb"\ntimescale = "1ns/1ps"\n'
             )
         config += (
             '[[fpga]]\nid = "ego1"\npart = "xc7a35tcsg324-1"\n'
-            f'[[project]]\nid = "{name}"\nfpga = "ego1"\n'
-            'top-symbol = "core"\nsynthesis = "core.json"\n'
-            'implementation = "core.fasm"\nbitstream = "core.bit"\n'
-            'constraints = "board.xdc"\n'
+            f'[[project]]\nid = "{name}"\nfpga = "ego1"\ntop-symbol = "core"\nconstraints = "board.xdc"\n'
         )
         (self.root / "configuration.toml").write_text(config)
         (self.root / "build/fpga").mkdir(parents=True)
@@ -103,15 +92,16 @@ class BuildSystemTests(unittest.TestCase):
         (self.root / "database/xc7a35tcsg324-1/part.yaml").write_text("{}\n")
         return name
 
+    @unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm")
     def test_program_only_stage_order(self) -> None:
         name = self.add_program()
         tool_dir = self.root / "fake-tools"
         tool_dir.mkdir()
         for tool, artifact in (
-            ("yosys", "build/synth/core.json"),
-            ("nextpnr-himbaechel", "build/impl/core.fasm"),
-            ("fasm2frames", "build/bits/core.frames"),
-            ("xc7frames2bit", "build/bits/core.bit"),
+            ("yosys", "build/yosys/coreprog/coreprog.json"),
+            ("nextpnr-himbaechel", "build/yosys/coreprog/coreprog.fasm"),
+            ("fasm2frames", "build/yosys/coreprog/coreprog.frames"),
+            ("xc7frames2bit", "build/yosys/coreprog/coreprog.bit"),
         ):
             script = tool_dir / tool
             if tool == "yosys":
@@ -155,7 +145,7 @@ class BuildSystemTests(unittest.TestCase):
                     self.assertEqual(log.parents[1], Path("/dev/shm"))
                     self.assertTrue(log.is_file())
                     self.addCleanup(shutil.rmtree, log.parent)
-        self.assertEqual((self.root / "build/synth/core.json").read_text(),
+        self.assertEqual((self.root / "build/yosys/coreprog/coreprog.json").read_text(),
                          '{"modules":{"core":{}}}\n')
         self.assertFalse((self.root / "build/synth/coreprog.synthesis.log").exists())
         self.assertFalse((self.root / "build/impl/coreprog.implementation.log").exists())
@@ -179,7 +169,7 @@ class BuildSystemTests(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertNotEqual(broken.returncode, 0)
         self.assertIn("compact_json", broken.stderr)
-        self.assertFalse((self.root / "build/synth/core.json").exists())
+        self.assertFalse((self.root / "build/yosys/coreprog/coreprog.json").exists())
         for line in broken.stderr.splitlines():
             if line.startswith("Synthesis log: "):
                 self.addCleanup(shutil.rmtree, Path(line.split(": ", 1)[1]).parent)
@@ -190,7 +180,7 @@ class BuildSystemTests(unittest.TestCase):
         broken = subprocess.run([*command, "synthesis", name], env=env,
                                 capture_output=True, text=True)
         self.assertNotEqual(broken.returncode, 0)
-        self.assertFalse((self.root / "build/synth/core.json").exists())
+        self.assertFalse((self.root / "build/yosys/coreprog/coreprog.json").exists())
         for line in broken.stderr.splitlines():
             if line.startswith("Synthesis log: "):
                 self.addCleanup(shutil.rmtree, Path(line.split(": ", 1)[1]).parent)
@@ -211,13 +201,10 @@ class BuildSystemTests(unittest.TestCase):
             ('fpga = "ego1"', 'fpga = "missing"', "unknown fpga id"),
             ('top-symbol = "core"', 'top-symbol = "missing"', "no exported top-symbol"),
             ('constraints = "board.xdc"', 'constraints = "missing.xdc"', "constraints file does not exist"),
-            ('implementation = "core.fasm"', 'implementation = "core.json"', "duplicate output"),
+            ('top-symbol = "core"', 'top-symbol = "core"\nbitstream = "old.bit"', "obsolete"),
         ):
             with self.subTest(error=error):
                 changed = original.replace(needle, replacement)
-                if error == "duplicate output":
-                    changed = changed.replace('implementation = "build/impl"',
-                                              'implementation = "build/synth"')
                 config_path.write_text(changed)
                 failure = self.cli("auxiliary")
                 self.assertNotEqual(failure.returncode, 0)
@@ -227,7 +214,7 @@ class BuildSystemTests(unittest.TestCase):
     def test_script_generates_auxiliary_and_dispatches(self) -> None:
         script = self.cli("script")
         self.assertEqual(script.returncode, 0, script.stderr)
-        self.assertEqual(script.stdout.splitlines(),
+        self.assertEqual(script.stdout.splitlines()[:4],
                          ["configure", "model", "auxiliary generation", "script generation"])
         self.assertTrue((self.root / "jobs.sh").is_file())
         self.assertFalse((self.root / "example.sh").exists())
@@ -256,19 +243,19 @@ class BuildSystemTests(unittest.TestCase):
                                  capture_output=True, text=True)
         self.assertEqual(install.returncode, 0, install.stderr)
         outputs = (
-            self.root / "build/vvp/demo.vvp",
-            self.root / "build/vcd/demo.vcd",
-            self.root / "build/synth/core.json",
-            self.root / "build/impl/core.fasm",
-            self.root / "build/bits/core.frames",
-            self.root / "build/bits/core.bit",
+            self.root / "build/icarus/demo/demo.vvp",
+            self.root / "build/icarus/demo/demo.vcd",
+            self.root / "build/yosys/prog_demo/prog_demo.json",
+            self.root / "build/yosys/prog_demo/prog_demo.fasm",
+            self.root / "build/yosys/prog_demo/prog_demo.frames",
+            self.root / "build/yosys/prog_demo/prog_demo.bit",
         )
         for output in outputs:
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text("result")
         selected = self.cli("clean", "demo")
         self.assertEqual(selected.returncode, 0, selected.stderr)
-        self.assertEqual(selected.stdout.splitlines(), ["configure", "script generation", "script execution"])
+        self.assertEqual(selected.stdout.splitlines(), ["configure", "cleanup execution"])
         self.assertTrue(all(not output.exists() for output in outputs[:2]))
         self.assertTrue(all(output.exists() for output in outputs[2:]))
         self.assertTrue((self.root / "build/auxiliary/demo.f").exists())
@@ -277,7 +264,7 @@ class BuildSystemTests(unittest.TestCase):
 
         selected_dist = self.cli("cleandist", "prog_demo")
         self.assertEqual(selected_dist.returncode, 0, selected_dist.stderr)
-        self.assertEqual(selected_dist.stdout.splitlines(), ["configure", "script generation", "script execution"])
+        self.assertEqual(selected_dist.stdout.splitlines(), ["configure", "cleanup execution"])
         self.assertTrue(all(not output.exists() for output in outputs[2:]))
         self.assertFalse((self.root / "build/auxiliary/prog_demo.ys").exists())
         self.assertFalse((self.root / "build/jobs/prog_demo").exists())
@@ -294,10 +281,11 @@ class BuildSystemTests(unittest.TestCase):
         self.assertTrue((self.root / "build/jobs/prog_demo/synthesis.sh").exists())
 
         for output in outputs:
+            output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text("result")
         cleaned = self.cli("clean")
         self.assertEqual(cleaned.returncode, 0, cleaned.stderr)
-        self.assertEqual(cleaned.stdout.splitlines(), ["configure", "script generation", "script execution"])
+        self.assertEqual(cleaned.stdout.splitlines(), ["configure", "cleanup execution"])
         self.assertTrue(all(not output.exists() for output in outputs))
         self.assertTrue(model_file(self.root, "model", "src/core.v").exists())
         self.assertTrue((self.root / "build/jobs/demo/build.sh").exists())
@@ -305,21 +293,21 @@ class BuildSystemTests(unittest.TestCase):
 
         dist = self.cli("cleandist")
         self.assertEqual(dist.returncode, 0, dist.stderr)
-        self.assertEqual(dist.stdout.splitlines(), ["configure", "script generation", "script execution"])
+        self.assertEqual(dist.stdout.splitlines(), ["configure", "cleanup execution"])
         for generated in ("build/auxiliary", "build/model", "build/symbol", "build/jobs", "jobs.sh"):
             self.assertFalse((self.root / generated).exists())
         for wrapper in ("buildsys", "buildsys.sh", "buildsys.bat"):
             self.assertTrue((self.root / wrapper).exists())
-        restored = subprocess.run([str(self.root / "buildsys"), "script"],
+        restored = subprocess.run([str(self.root / ("buildsys.bat" if os.name == "nt" else "buildsys")), "script"],
                                   capture_output=True, text=True)
         self.assertEqual(restored.returncode, 0, restored.stderr)
         self.assertTrue((self.root / "build/jobs/prog_demo/synthesis.sh").exists())
 
-    def test_dispatcher_cleanup_is_shell_only_and_can_remove_itself(self) -> None:
+    def test_dispatcher_cleanup_forwards_to_python_and_can_remove_itself(self) -> None:
         self.add_program(mixed=True)
         self.assertEqual(self.cli("script").returncode, 0)
-        outputs = ("build/vvp/demo.vvp", "build/vcd/demo.vcd", "build/synth/core.json",
-                   "build/impl/core.fasm", "build/bits/core.frames", "build/bits/core.bit")
+        outputs = ("build/icarus/demo/demo.vvp", "build/icarus/demo/demo.vcd", "build/yosys/prog_demo/prog_demo.json",
+                   "build/yosys/prog_demo/prog_demo.fasm", "build/yosys/prog_demo/prog_demo.frames", "build/yosys/prog_demo/prog_demo.bit")
         for relative in outputs:
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -340,8 +328,9 @@ class BuildSystemTests(unittest.TestCase):
         self.assertEqual(project_dist.returncode, 0, project_dist.stderr)
         for path in ("jobs.sh", "build/auxiliary", "build/jobs"):
             self.assertFalse((self.root / path).exists())
-        # Python generates only a transient shell task; absent project scripts stay absent.
+        # CLI cleanup remains usable after all generated scripts are removed.
         pending = set(Path("/dev/shm").glob("buildsys-clean-*.sh"))
+        (self.root / outputs[0]).parent.mkdir(parents=True, exist_ok=True)
         (self.root / outputs[0]).write_text("result")
         transient = self.cli("clean", "demo")
         self.assertEqual(transient.returncode, 0, transient.stderr)
@@ -379,6 +368,7 @@ class BuildSystemTests(unittest.TestCase):
         self.assertNotEqual(old_simulation.returncode, 0)
         self.assertIn("name is obsolete", old_simulation.stderr)
 
+    @unittest.skipIf(os.name == "nt", "Requires Linux Bash and /dev/shm")
     def test_install_wrappers_forward_to_project(self) -> None:
         install = subprocess.run(
             [sys.executable, str(ENTRY), "install", "buildsys", str(self.root)],
@@ -499,37 +489,25 @@ class BuildSystemTests(unittest.TestCase):
         self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns) for path in files}, before)
         self.assertNotEqual(self.cli("script").returncode, 0)
 
-    def test_cleanup_uses_only_output_configuration_and_validates_before_deleting(self) -> None:
+    def test_cleanup_does_not_require_sources_or_local_fpga_settings(self) -> None:
         self.add_program(mixed=True)
         self.assertEqual(self.cli("script").returncode, 0)
-        simulation = self.root / "build/vvp/demo.vvp"
-        program = self.root / "build/bits/core.bit"
+        simulation = self.root / "build/icarus/demo/demo.vvp"
+        program = self.root / "build/yosys/prog_demo/prog_demo.bit"
         for path in (simulation, program):
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("keep until cleaned")
+            path.write_text("result")
         local = self.root / "build/fpga/ego1.toml"
         local.write_text("broken TOML [")
         shutil.rmtree(self.root / "src")
         shutil.rmtree(self.root / "constraints")
-        config = self.root / "configuration.toml"
-        text = config.read_text().replace('fpga = "ego1"', 'fpga = "unknown"')
-        config.write_text(text.replace('bitstream = "core.bit"', 'bitstream = "../unsafe.bit"'))
-        for command in ("clean", "cleandist"):
-            failure = self.cli(command)
-            self.assertNotEqual(failure.returncode, 0)
-            self.assertIn("file name without directories", failure.stderr)
-            self.assertTrue(simulation.exists())
-            self.assertTrue(program.exists())
-            self.assertTrue((self.root / "jobs.sh").exists())
-        selected = self.cli("clean", "demo")
-        self.assertEqual(selected.returncode, 0, selected.stderr)
+        self.assertEqual(self.cli("clean", "demo").returncode, 0)
         self.assertFalse(simulation.exists())
         self.assertTrue(program.exists())
-        config.write_text(text)
-        cleaned = self.cli("cleandist")
-        self.assertEqual(cleaned.returncode, 0, cleaned.stderr)
+        result = self.cli("cleandist")
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(program.exists())
-        self.assertFalse((self.root / "build/jobs").exists())
+        self.assertFalse((self.root / "jobs.sh").exists())
         self.assertEqual(local.read_text(), "broken TOML [")
 
     @unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "Icarus Verilog unavailable")
@@ -539,8 +517,8 @@ class BuildSystemTests(unittest.TestCase):
         self.assertEqual(build.returncode, 0, build.stderr)
         self.assertEqual(build.stdout.splitlines()[:5],
                          ["configure", "model", "auxiliary generation", "script generation", "script execution"])
-        self.assertTrue((self.root / "build/vvp/demo.vvp").exists())
-        self.assertFalse((self.root / "build/vvp/second.vvp").exists())
+        self.assertTrue((self.root / "build/icarus/demo/demo.vvp").exists())
+        self.assertFalse((self.root / "build/icarus/second/second.vvp").exists())
         self.assertTrue((self.root / "build/jobs/demo/build.sh").exists())
         self.assertFalse((self.root / "build/jobs/demo/simulate.sh").exists())
         self.assertFalse((self.root / "build/jobs/demo/clean.sh").exists())
@@ -559,26 +537,26 @@ class BuildSystemTests(unittest.TestCase):
         self.assertNotIn("Unknown simulation", second_build.stderr)
         second_build = self.cli("build", "second")
         self.assertEqual(second_build.returncode, 0, second_build.stderr)
-        self.assertTrue((self.root / "build/vvp/second.vvp").exists())
+        self.assertTrue((self.root / "build/icarus/second/second.vvp").exists())
 
         first_simulation = self.cli("simulate", "demo")
         self.assertEqual(first_simulation.returncode, 0, first_simulation.stderr)
-        self.assertTrue((self.root / "build/vcd/demo.vcd").exists())
-        self.assertFalse((self.root / "build/vcd/second.vcd").exists())
+        self.assertTrue((self.root / "build/icarus/demo/demo.vcd").exists())
+        self.assertFalse((self.root / "build/icarus/second/second.vcd").exists())
         first_clean = self.cli("clean", "demo")
         self.assertEqual(first_clean.returncode, 0, first_clean.stderr)
-        self.assertFalse((self.root / "build/vvp/demo.vvp").exists())
-        self.assertFalse((self.root / "build/vcd/demo.vcd").exists())
-        self.assertTrue((self.root / "build/vvp/second.vvp").exists())
+        self.assertFalse((self.root / "build/icarus/demo/demo.vvp").exists())
+        self.assertFalse((self.root / "build/icarus/demo/demo.vcd").exists())
+        self.assertTrue((self.root / "build/icarus/second/second.vvp").exists())
         self.assertTrue((self.root / "build/jobs/demo/build.sh").exists())
 
         second_simulation = self.cli("simulate", "second")
         self.assertEqual(second_simulation.returncode, 0, second_simulation.stderr)
-        self.assertTrue((self.root / "build/vcd/second.vcd").exists())
+        self.assertTrue((self.root / "build/icarus/second/second.vcd").exists())
         second_clean = self.cli("clean", "second")
         self.assertEqual(second_clean.returncode, 0, second_clean.stderr)
-        self.assertFalse((self.root / "build/vvp/second.vvp").exists())
-        self.assertFalse((self.root / "build/vcd/second.vcd").exists())
+        self.assertFalse((self.root / "build/icarus/second/second.vvp").exists())
+        self.assertFalse((self.root / "build/icarus/second/second.vcd").exists())
         self.assertTrue((self.root / "build/auxiliary/second.f").exists())
         for path in (self.root / "build/jobs").rglob("*.sh"):
             self.assertEqual(subprocess.run(["bash", "-n", str(path)]).returncode, 0)

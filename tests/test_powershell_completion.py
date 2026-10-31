@@ -145,7 +145,7 @@ class PowerShellAdapterTests(unittest.TestCase):
             install_wrappers(self.project)
         (self.project / "configuration.toml").write_text(
             '[[simulation]]\nid="tb_one"\n[[simulation]]\nid="tb_two"\n'
-            '[[project]]\nid="core"\n[[xpr]]\nid="export"\nsimulations=["tb_two"]\n', encoding="utf-8")
+            '[[project]]\nid="core"\n', encoding="utf-8")
         (self.root / "目标 '目录").mkdir()
 
     def complete(self, shell, lines, cursors=None, adapter=ADAPTER):
@@ -171,13 +171,13 @@ foreach ($request in $requests) {
             (" sim", ["simulate"]),
             (" simulate ", ["tb_one", "tb_two"]),
             (" simulate tb_t", ["tb_two"]),
-            (" xpr-simulation export ", ["tb_two"]),
+            (" xpr-simulation ", ["tb_one", "tb_two"]),
             (" toolchain ", ["yosys", "vivado"]),
             (" install completion --terminal=p", ["--terminal=powershell"]),
             (" install completion --terminal ", ["bash", "powershell"]),
             (" install completion '目标 '", ["'目标 ''目录/'"]),
             (" program core --busdev-num 1:2 ", ["--protocol"]),
-            (" xpr-program export --device 1 ", ["--hw-server"]),
+            (" xpr-program core --device 1 ", ["--hw-server"]),
         ]
         for shell in SHELLS:
             with self.subTest(shell=shell):

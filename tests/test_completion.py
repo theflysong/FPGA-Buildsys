@@ -145,9 +145,9 @@ class CompletionTests(unittest.TestCase):
 
     def test_shared_stage_completion_follows_selection_without_generating(self) -> None:
         (self.root / "configuration.toml").write_text(
-            '[[project]]\nid = "design"\n[[xpr]]\nid = "export"\n'
+            '[[project]]\nid = "design"\n'
         )
-        for toolchain, expected in (("yosys", ["coreprog", "design"]), ("vivado", ["export"])):
+        for toolchain, expected in (("yosys", ["coreprog", "design"]), ("vivado", ["design"])):
             select_toolchain(self.root, toolchain)
             before = selection_path(self.root).read_bytes()
             for stage in ("synthesis", "implementation", "bitstream", "program"):
@@ -166,12 +166,12 @@ class CompletionTests(unittest.TestCase):
             '[[simulation]]\nid = "tb_first"\n[[simulation]]\nid = "tb_second"\n'
             '[[simulation]]\nid = "tb_first"\n[[simulation]]\nid = "invalid id"\n'
             '[[project]]\nid = "first_program"\n'
-            '[[xpr]]\nid = "first_export"\n'
+            ''
         )
         self.assertEqual(self.query("simulate", "tb_f"), ["tb_first"])
         self.assertEqual(self.query("build", ""), ["tb_first", "tb_second"])
         self.assertEqual(self.query("synthesis", "first", wrapper="buildsys.sh"), ["first_program"])
-        self.assertEqual(self.query("xpr", "first"), ["first_export"])
+        self.assertEqual(self.query("xpr", "first"), [])
         self.assertEqual(set(self.query("cleandist", "")), {"tb_first", "tb_second", "first_program"})
         self.assertFalse((self.root / "build").exists())
         # Invalid private configuration has no bearing on completion.
@@ -185,12 +185,12 @@ class CompletionTests(unittest.TestCase):
     def test_auxiliary_and_configuration_ids_are_merged_for_each_target_type(self) -> None:
         (self.root / "configuration.toml").write_text(
             '[[simulation]]\nid = "configured_sim"\n[[project]]\nid = "configured_program"\n'
-            '[[xpr]]\nid = "configured_export"\n'
+            ''
         )
         self.assertEqual(self.query("simulate", ""), ["demo", "tb_other", "configured_sim"])
         self.assertEqual(self.query("simulate", "configured"), ["configured_sim"])
         self.assertEqual(self.query("program", ""), ["coreprog", "configured_program"])
-        self.assertEqual(self.query("xpr", ""), ["configured_export"])
+        self.assertEqual(self.query("xpr", ""), [])
         (self.auxiliary / "coreprog.ys").unlink()
         (self.auxiliary / "invalid id.ys").touch()
         self.assertEqual(self.query("program", ""), ["configured_program"])

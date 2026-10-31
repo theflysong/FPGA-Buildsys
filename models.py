@@ -68,25 +68,48 @@ class XprSimulation:
 @dataclass(frozen=True)
 class XprProject:
     identifier: str
-    project_id: str
     fpga: Fpga
     top: str
     constraints: Path
-    simulations: tuple[XprSimulation, ...]
-    xpr: Path
+
+    @property
+    def source_set(self) -> str:
+        return f"src_{self.identifier}"
+
+    @property
+    def constraint_set(self) -> str:
+        return f"constrs_{self.identifier}"
+
+    @property
+    def synthesis_run(self) -> str:
+        return f"synth_{self.identifier}"
+
+    @property
+    def implementation_run(self) -> str:
+        return f"impl_{self.identifier}"
 
 
 @dataclass(frozen=True)
 class XprStageTarget:
     """Resolved information used by commands operating on an existing XPR."""
 
-    xpr_id: str
+    identifier: str
     xpr: Path
-    top: str
-    simulations: tuple[XprSimulation, ...]
-    synthesis_run: str = "synth_1"
-    implementation_run: str = "impl_1"
+    kind: str = "project"
     bitstream: Path | None = None
+    artifacts: tuple[tuple[str, Path], ...] = ()
+
+    @property
+    def synthesis_run(self) -> str:
+        return f"synth_{self.identifier}"
+
+    @property
+    def implementation_run(self) -> str:
+        return f"impl_{self.identifier}"
+
+    @property
+    def fileset(self) -> str:
+        return f"sim_{self.identifier}" if self.kind == "simulation" else f"src_{self.identifier}"
 
 
 @dataclass(frozen=True)
@@ -94,6 +117,7 @@ class CleanupTarget:
     identifier: str
     outputs: tuple[Path, ...]
     auxiliary: Path
+    kind: str = "project"
 
 
 @dataclass(frozen=True)
@@ -120,6 +144,8 @@ class Project:
     program_ids: tuple[str, ...] = ()
     cleanup_targets: tuple[CleanupTarget, ...] = ()
     xprs: tuple[XprProject, ...] = ()
+    xpr_simulations: tuple[XprSimulation, ...] = ()
+    xpr: Path | None = None
     xpr_stages: tuple[XprStageTarget, ...] = ()
     source_directories: tuple[Path, ...] = ()
     simulation_directories: tuple[Path, ...] = ()
