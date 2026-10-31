@@ -200,6 +200,15 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(self.query("program", ""), [])
         self.assertEqual(self.query("simulate", ""), ["demo", "tb_other"])
 
+    def test_simulate_candidates_follow_selected_toolchain(self) -> None:
+        (self.root / "configuration.toml").write_text('[[simulation]]\nid="configured_sim"\n')
+        select_toolchain(self.root, "vivado")
+        self.assertEqual(self.query("simulate", ""), ["configured_sim"])
+        select_toolchain(self.root, "yosys")
+        self.assertEqual(self.query("simulate", ""), ["demo", "tb_other", "configured_sim"])
+        selection_path(self.root).write_text("invalid JSON")
+        self.assertEqual(self.query("simulate", ""), ["demo", "tb_other", "configured_sim"])
+
     def test_program_options_and_no_device_access(self) -> None:
         self.assertEqual(self.query("program", "coreprog", "--p"), ["--protocol"])
         self.assertEqual(set(self.query("program", "coreprog", "")), {

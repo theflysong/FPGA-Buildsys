@@ -10,7 +10,7 @@ import sys
 
 from planner import Planner
 from task import COMMANDS
-from toolchains import STAGES, resolve_command
+from toolchains import ROUTED_COMMANDS, resolve_command
 from util import ConfigError
 
 
@@ -22,7 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     probe.add_argument("command", nargs="?")
     preliminary, _ = probe.parse_known_args(argv)
     workflows = dict(COMMANDS)
-    if preliminary.command in STAGES and preliminary.project is not None:
+    if preliminary.command in ROUTED_COMMANDS and preliminary.project is not None:
         try:
             command = resolve_command(preliminary.project.expanduser().resolve(), preliminary.command)
             workflows[preliminary.command] = COMMANDS[command]
@@ -35,13 +35,13 @@ def main(argv: list[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command, workflow in workflows.items():
         help_text = (f"Run {command} using the selected toolchain."
-                     if command in STAGES else workflow.__doc__)
+                     if command in ROUTED_COMMANDS else workflow.__doc__)
         command_parser = subparsers.add_parser(command, help=help_text)
         if hasattr(workflow, "add_arguments"):
             workflow.add_arguments(command_parser)
     arguments = parser.parse_args(argv)
     workflow = workflows[arguments.command]
-    project_command = arguments.command in Planner.TASKS or arguments.command in STAGES
+    project_command = arguments.command in Planner.TASKS or arguments.command in ROUTED_COMMANDS
     if project_command and arguments.project is None:
         parser.error("--project is required for project commands")
     if hasattr(workflow, "validate_arguments"):

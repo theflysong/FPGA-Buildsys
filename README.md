@@ -44,22 +44,25 @@ Shell 和 Tcl 输出使用 LF，批处理输出使用 CRLF，shell 入口和任�
 选择不依赖 `configuration.toml`、已安装的 FPGA 工具或许可证。
 
 `auxiliary`、`script` 必须先选择任意一种工具链；
-`synthesis`、`implementation`、`bitstream`、`program` 根据当前选择路由到对应工具链：
+`simulate`、`synthesis`、`implementation`、`bitstream`、`program` 根据当前选择路由到对应工具链：
 
 | 通用命令 | `toolchain yosys` | `toolchain vivado` |
 | --- | --- | --- |
+| `simulate` | Icarus Verilog 仿真 | `xpr-simulation` |
 | `synthesis` | `yosys-synthesis` | `xpr-synthesis` |
 | `implementation` | `yosys-implementation` | `xpr-implementation` |
 | `bitstream` | `yosys-bitstream` | `xpr-bitstream` |
 | `program` | `yosys-program` | `xpr-program` |
 
-Yosys 和 Vivado 阶段都接收 `[[project]]` 的 id；Vivado 的 `xpr` 命令不接收目标参数。
+`simulate` 接收 `[[simulation]]` 的 id；FPGA 阶段接收 `[[project]]` 的 id。Vivado 的 `xpr` 命令不接收目标参数。
+选择 `vivado` 后，`simulate` 直接打开已有 XPR 执行仿真，无需 Bash 或 Icarus；先运行 `xpr` 导出工程，配置或源码路径变化后重新导出。
+未选择工具链时，`simulate` 保留 Icarus Verilog 仿真行为；`build` 始终使用 Icarus 编译。
 `program` 的参数和帮助也按工具链切换：Yosys 必须指定 `--protocol`，可用 `--busdev-num` 或 `--ftdi-serial`；
 Vivado 使用 `--hw-server` 和 `--device`，默认 Hardware Server 为 `localhost:3121`。
 显式的 `yosys-*` 命令必须选择 `yosys`；
 `xpr` 和全部 `xpr-*` 命令必须选择 `vivado`。
-未选择、状态文件损坏或所选工具链不匹配时，在配置和生成文件之前返回错误，提示重新选择。
-`build`、`simulate`、`model`、`clean`、`cleandist`、`init`、`init-venv`、`install`、`completion` 及帮助不要求选择。
+要求选择工具链的命令在未选择时返回错误；状态文件损坏或所选工具链不匹配时，也在配置和生成文件之前报错，提示重新选择。
+`build`、`model`、`clean`、`cleandist`、`init`、`init-venv`、`install`、`completion` 及帮助不要求选择。
 
 切换时再次执行 `toolchain yosys` 或 `toolchain vivado`，只更新当前选择，不删除已有产物。
 `cleandist` 保留工具链选择。新生成的 Yosys FPGA 任务脚本在直接调用时也检查选择；升级后请重新生成旧脚本。
@@ -68,7 +71,7 @@ Vivado 使用 `--hw-server` 和 `--device`，默认 Hardware Server 为 `localho
 专属任务分别位于 `task/yosys/` 和 `task/vivado/`，通用配置、源码模型、仿真和清理入口保留在 `task/`。
 选择 `yosys` 时，`auxiliary/script` 生成原有仿真及 FPGA 任务；选择 `vivado` 时，这两个命令只生成通用仿真任务，
 不要求 Yosys 的综合/实现/bitstream 配置，也不创建 FPGA 本地设置。Vivado 工程通过 `xpr` 导出，阶段可通过通用命令或 `xpr-*` 执行。
-重新运行 `script` 或阶段命令生成的 `jobs.sh` 同样支持通用阶段路由及 `yosys-*` 名称。
+重新运行 `script` 或阶段命令生成的 `jobs.sh` 同样支持 `simulate` 和通用 FPGA 阶段路由及 `yosys-*` 名称。
 直接执行已有的 `build/jobs/<id>/*.sh` 仍是对应的 Yosys 任务，并检查当前工具链。
 
 你可以通过 python3 脚本运行该构建系统, 如:
@@ -194,13 +197,13 @@ configure -> model -> auxiliary -> script ---|---> build -> simulate
 | 命令 | 需要的配置 |
 | --- | --- |
 | `model` | 公共项目配置、源码目录、HDL 配置及全部源码; 无需任务构建字段或 FPGA 本地设置 |
-| `build` / `simulate` | 当前 simulation 的顶层模块及其源码依赖；timescale 默认 `1ns/1ps` |
+| `build` / Icarus `simulate` | 当前 simulation 的顶层模块及其源码依赖；timescale 默认 `1ns/1ps` |
 | `yosys-synthesis` | 当前 project 的顶层和源码依赖、引用 FPGA 及本地构建设置 |
 | `yosys-implementation` | 综合所需配置，加已有约束文件 |
 | `yosys-bitstream` | 实现所需配置 |
 | `yosys-program` | 已有 bitstream 的路径、FPGA 引用、可选工具路径、显式 protocol; 无需源码、约束、数据库或 PYTHONPATH |
 | `xpr` | 全部 project 和 simulation、各自源码依赖、约束与 FPGA part；纯仿真无需 FPGA |
-| `xpr-simulation` / `xpr-synthesis` / `xpr-implementation` / `xpr-bitstream` / `xpr-program` | 公共配置、project/simulation id、自动定位的共享 `.xpr`; 阶段执行无需重新扫描源码或读取 Yosys 本地设置；`xpr-program` 还需要有效 bitstream 和可用 Hardware Server |
+| Vivado `simulate` / `xpr-simulation` / `xpr-synthesis` / `xpr-implementation` / `xpr-bitstream` / `xpr-program` | 公共配置、project/simulation id、自动定位的共享 `.xpr`; 阶段执行无需重新扫描源码或读取 Yosys 本地设置；`xpr-program` 还需要有效 bitstream 和可用 Hardware Server |
 | `clean` / `cleandist` | 公共配置和目标 id；无需源码、约束或 FPGA 本地设置；按目标清理现存共享 XPR 需要 Vivado |
 | `auxiliary` / `script` | 已选择工具链、全部源码依赖；Yosys 校验全量仿真/FPGA 配置和本地设置格式，Vivado 校验通用仿真配置 |
 
@@ -359,9 +362,10 @@ buildsys.bat xpr-bitstream <project-id>
 buildsys.bat xpr-program <project-id> [--hw-server localhost:3121] [--device "xc7*"]
 ```
 
-选择 `vivado` 后，也可以使用通用命令，目标为 project id：
+选择 `vivado` 后，也可以使用通用命令，`simulate` 接收 simulation id，FPGA 阶段接收 project id：
 
 ```bat
+buildsys.bat simulate bin2bcd
 buildsys.bat implementation driver7seg
 buildsys.bat bitstream driver7seg
 buildsys.bat program driver7seg --hw-server localhost:3121 --device "xc7*"

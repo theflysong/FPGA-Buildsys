@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 from completion_ids import ID_RE, candidate_ids
-from toolchains import STAGES, YOSYS_COMMANDS, resolve_command
+from toolchains import ROUTED_COMMANDS, YOSYS_COMMANDS, resolve_command
 from util import ConfigError
 
 
@@ -111,12 +111,13 @@ def candidates(root: Path, words: list[str]) -> list[str]:
     words = words or [""]
     position = len(words) - 1
     command, prefix = words[0], words[-1]
-    if position > 0 and command in STAGES:
+    if position > 0 and command in ROUTED_COMMANDS:
         try:
             command = resolve_command(root, command)
         except (ConfigError, OSError):
             # Preserve useful completion before a toolchain has been selected.
-            command = "yosys-" + command
+            if command != "simulate":
+                command = "yosys-" + command
     result: list[str] = []
     if position == 0:
         result = list(COMMANDS)

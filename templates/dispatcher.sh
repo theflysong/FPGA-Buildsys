@@ -10,7 +10,7 @@ usage() {
 command=$1
 shift
 case "$command" in
-  synthesis|implementation|bitstream|program)
+  simulate|synthesis|implementation|bitstream|program)
     command=$(python3 $(toolchains) . --resolve "$command")
     ;;
 esac

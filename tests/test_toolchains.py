@@ -231,6 +231,53 @@ class ToolchainTests(unittest.TestCase):
         for command in ("xpr", "xpr-simulation", "xpr-synthesis", "xpr-implementation", "xpr-bitstream", "xpr-program"):
             self.assertTrue(COMMANDS[command].__name__.startswith("task.vivado."))
 
+    def test_vivado_simulate_uses_existing_xpr_without_loading_sources(self) -> None:
+        select_toolchain(self.root, "vivado")
+        xpr = self.root / "build/vivado/example/example.xpr"
+        xpr.parent.mkdir(parents=True)
+        xpr.write_text("existing project")
+        self.config.write_text('name="Existing XPR"\nid="example"\n[[simulation]]\nid="test"\n')
+        for command in ("simulate", "xpr-simulation"):
+            with self.subTest(command=command), \
+                    patch("task.vivado.xpr_stage.execute") as execute, \
+                    patch("task.simulate.execute_job", side_effect=AssertionError("Icarus must not run")), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(main(["--project", str(self.root), command, "test"]), 0)
+                project, target, task_args, script = execute.call_args.args
+                self.assertEqual((project.command, project.toolchain, target),
+                                 ("xpr-simulation", "vivado", "test"))
+                self.assertEqual(project.xpr, xpr)
+                self.assertEqual((task_args, script), ((), None))
+                self.assertNotIn("\nmodel\n", output.getvalue())
+        self.assertEqual(xpr.read_text(), "existing project")
+        self.assertFalse((self.root / "build/jobs").exists())
+
+    def test_simulate_keeps_icarus_for_yosys_or_no_selection(self) -> None:
+        for name in ("yosys", None):
+            if name:
+                select_toolchain(self.root, name)
+            else:
+                selection_path(self.root).unlink()
+            with self.subTest(toolchain=name), \
+                    patch("task.simulate.execute_job") as execute, \
+                    patch("task.vivado.xpr_stage.execute", side_effect=AssertionError("Vivado must not run")), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(["--project", str(self.root), "simulate", "test"]), 0)
+                project, command, target, _, _ = execute.call_args.args
+                self.assertEqual((project.command, command, target), ("simulate", "simulate", "test"))
+                self.assertTrue((self.root / "build/jobs/test/simulate.sh").is_file())
+
+    def test_vivado_simulate_reports_missing_xpr_and_invalid_arguments(self) -> None:
+        select_toolchain(self.root, "vivado")
+        result = self.cli("simulate", "test")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("run buildsys xpr first", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertFalse((self.root / "build").exists())
+        result = self.cli("simulate", "test", "other")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("omit the old xpr-id", result.stderr)
+
     def test_yosys_shared_and_explicit_stages_generate_and_execute_the_same_jobs(self) -> None:
         select_toolchain(self.root, "yosys")
         local = self.root / ".buildsys/fpga/board.toml"

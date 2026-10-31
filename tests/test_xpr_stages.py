@@ -60,7 +60,7 @@ class XprStageTests(unittest.TestCase):
     def cli(self, command, *args, state=None, target="core"):
         self.calls_path.unlink(missing_ok=True)
         result = subprocess.run(
-            [sys.executable, "-B", str(ENTRY), "--project", str(self.root), command, *(args if command == "xpr-simulation" else (target, *args))],
+            [sys.executable, "-B", str(ENTRY), "--project", str(self.root), command, *(args if command in {"simulate", "xpr-simulation"} else (target, *args))],
             cwd=self.root, env=dict(self.env, XPR_FAKE_STATE=json.dumps(state or {})),
             capture_output=True, text=True, timeout=20,
         )
@@ -123,6 +123,28 @@ class XprStageTests(unittest.TestCase):
                 else:
                     self.assertTrue(self.calls("launch_runs"))
         self.assertTrue(bitstream.is_file())
+
+    def test_simulate_uses_vivado_simulation_from_cli(self):
+        self.succeeded(self.cli("simulate", "first"))
+        self.assertEqual(self.calls("launch_simulation"), [
+            ["launch_simulation", "-mode", "behavioral", "-simset", "sim_first"]])
+
+    def test_generated_simulation_dispatcher_uses_current_selection(self):
+        bash = Path("C:/Program Files/Git/bin/bash.exe") if os.name == "nt" else shutil.which("bash")
+        if not bash or not Path(bash).is_file():
+            self.skipTest("native Git Bash/Bash is unavailable")
+        python = self.tools / "python3"
+        python.write_text(f'#!/bin/sh\nexec "{Path(sys.executable).as_posix()}" "$@"\n', encoding="utf-8")
+        python.chmod(0o755)
+        select_toolchain(self.root, "yosys")
+        generate_script(Project(self.root, "example", (), (), toolchain="yosys"))
+        select_toolchain(self.root, "vivado")
+        self.calls_path.unlink()
+        result = subprocess.run([str(bash), str(self.root / "jobs.sh"), "simulate", "second"],
+                                cwd=self.root, env=self.env, capture_output=True, text=True, timeout=20)
+        self.succeeded(result)
+        self.assertEqual(self.calls("launch_simulation"), [
+            ["launch_simulation", "-mode", "behavioral", "-simset", "sim_second"]])
 
     def test_generated_dispatcher_uses_current_selection(self):
         bash = Path("C:/Program Files/Git/bin/bash.exe") if os.name == "nt" else shutil.which("bash")

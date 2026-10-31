@@ -13,6 +13,7 @@ from util import ConfigError
 
 TOOLCHAINS = ("yosys", "vivado")
 STAGES = ("synthesis", "implementation", "bitstream", "program")
+ROUTED_COMMANDS = {"simulate", *STAGES}
 STAGE_COMMANDS = {
     "yosys": {stage: f"yosys-{stage}" for stage in STAGES},
     "vivado": {stage: f"xpr-{stage}" for stage in STAGES},
@@ -82,7 +83,9 @@ def command_toolchain(root: Path, command: str) -> str | None:
 
 
 def resolve_command(root: Path, command: str) -> str:
-    """Route shared FPGA stages to the project's selected backend."""
+    """Route simulation and FPGA stages to the project's selected backend."""
+    if command == "simulate" and selection_path(root).exists():
+        return "xpr-simulation" if selected_toolchain(root) == "vivado" else "simulate"
     if command in STAGES:
         return STAGE_COMMANDS[selected_toolchain(root)][command]
     return command
