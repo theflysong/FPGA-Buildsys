@@ -34,11 +34,7 @@ class ToolchainTests(unittest.TestCase):
         for directory in ("src", "sim", "constraints"):
             (self.root / directory).mkdir()
         (self.root / "src/top.v").write_text("module top; endmodule\n")
-        (self.root / "src/top.toml").write_text('[[module.export]]\nname = "top"\n')
         (self.root / "sim/tb.v").write_text("module tb; top dut(); initial #1 $finish; endmodule\n")
-        (self.root / "sim/tb.toml").write_text(
-            '[[module.export]]\nname = "tb"\n[[module.import]]\nname = "top"\n'
-        )
         (self.root / "constraints/board.xdc").write_text("# constraints\n")
 
     def cli(self, *arguments: str, root: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -144,7 +140,7 @@ class ToolchainTests(unittest.TestCase):
         generated = self.cli("script")
         self.assertEqual(generated.returncode, 0, generated.stderr)
         for path in ("build/jobs/core/synthesis.sh", "build/jobs/core/program.sh",
-                     "build/auxiliary/core.ys", "build/auxiliary/test.f", "build/fpga/board.toml"):
+                     "build/auxiliary/core.ys", "build/auxiliary/test.f", ".buildsys/fpga/board.toml"):
             self.assertTrue((self.root / path).is_file(), path)
         bitstream = self.root / "build/yosys/core/core.bit"
         bitstream.parent.mkdir(parents=True)
@@ -166,7 +162,7 @@ class ToolchainTests(unittest.TestCase):
         self.assertTrue((self.root / "build/jobs/test/build.sh").is_file())
         self.assertFalse((self.root / "build/auxiliary/core.ys").exists())
         self.assertFalse((self.root / "build/jobs/core/synthesis.sh").exists())
-        self.assertFalse((self.root / "build/fpga").exists())
+        self.assertFalse((self.root / ".buildsys/fpga").exists())
         self.assertFalse((self.root / "build/xpr").exists())
 
     @unittest.skipIf(os.name == "nt", "Bash syntax validation is tested in Linux")
@@ -237,7 +233,7 @@ class ToolchainTests(unittest.TestCase):
 
     def test_yosys_shared_and_explicit_stages_generate_and_execute_the_same_jobs(self) -> None:
         select_toolchain(self.root, "yosys")
-        local = self.root / "build/fpga/board.toml"
+        local = self.root / ".buildsys/fpga/board.toml"
         local.parent.mkdir(parents=True)
         local.write_text('xray-database = "database"\nPYTHONPATH = ["src"]\n')
         for stage in STAGES:

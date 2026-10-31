@@ -33,14 +33,10 @@ class BuildSystemTests(unittest.TestCase):
             'name = "Example"\nid = "example"\n[directories]\nsources = ["src"]\n[[simulation]]\nid = "demo"\ntop-symbol = "tb"\ntimescale = "1ns/1ps"\n'
         )
         (self.root / "src/core.v").write_text("module core; endmodule\n")
-        (self.root / "src/core.toml").write_text('[[module.export]]\nname = "core"\n')
         (self.root / "src/tb.v").write_text(
             '`ifndef __VCD_FILE__\n`define __VCD_FILE__ "demo.vcd"\n`endif\n'
             'module tb; core dut(); initial begin $dumpfile(`__VCD_FILE__); '
             '$dumpvars(0, tb); #1 $finish; end endmodule\n'
-        )
-        (self.root / "src/tb.toml").write_text(
-            '[[module.export]]\nname = "tb"\n[[module.import]]\nname = "core"\n'
         )
 
     def cli(self, *args: str) -> subprocess.CompletedProcess[str]:
@@ -66,9 +62,6 @@ class BuildSystemTests(unittest.TestCase):
             'module tb_second; core dut(); initial begin $dumpfile(`__VCD_FILE__); '
             '$dumpvars(0, tb_second); #1 $finish; end endmodule\n'
         )
-        (self.root / "src/second.toml").write_text(
-            '[[module.export]]\nname = "tb_second"\n[[module.import]]\nname = "core"\n'
-        )
 
     def add_program(self, *, mixed: bool = False) -> str:
         name = "prog_demo" if mixed else "coreprog"
@@ -84,8 +77,8 @@ class BuildSystemTests(unittest.TestCase):
             f'[[project]]\nid = "{name}"\nfpga = "ego1"\ntop-symbol = "core"\nconstraints = "board.xdc"\n'
         )
         (self.root / "configuration.toml").write_text(config)
-        (self.root / "build/fpga").mkdir(parents=True)
-        (self.root / "build/fpga/ego1.toml").write_text('xray-database = "database"\nPYTHONPATH = ["src"]\n')
+        (self.root / ".buildsys/fpga").mkdir(parents=True)
+        (self.root / ".buildsys/fpga/ego1.toml").write_text('xray-database = "database"\nPYTHONPATH = ["src"]\n')
         (self.root / "constraints").mkdir()
         (self.root / "constraints/board.xdc").write_text("# test constraints\n")
         (self.root / "database/xc7a35tcsg324-1").mkdir(parents=True)
@@ -223,7 +216,8 @@ class BuildSystemTests(unittest.TestCase):
         self.assertEqual(json.loads(model_file(self.root, "symbol", "src/tb.v").read_text()),
                          {"path": "src/tb.v", "import": ["core"], "export": ["tb"]})
         self.assertEqual(json.loads(model_file(self.root, "model", "src/tb.v").read_text()),
-                         {"path": "src/tb.v", "dependencies": ["src/core.v"], "closure": ["src/core.v"]})
+                         {"path": "src/tb.v", "dependencies": ["src/core.v"], "closure": ["src/core.v"],
+                          "includes": []})
         self.assertFalse((self.root / "build/auxiliary/example.map").exists())
         self.assertFalse((self.root / "build/auxiliary/example.dep").exists())
         filelist = (self.root / "build/auxiliary/demo.f").read_text()
@@ -416,8 +410,8 @@ class BuildSystemTests(unittest.TestCase):
 
     def test_invalid_configurations_have_locations(self) -> None:
         cases = (
-            ("duplicate export", self.root / "src/tb.toml", '[[module.export]]\nname = "core"\n[[module.export]]\nname = "tb"\n'),
-            ("unresolved import", self.root / "src/tb.toml", '[[module.export]]\nname = "tb"\n[[module.import]]\nname = "missing"\n'),
+            ("duplicate export", self.root / "src/tb.v", 'module core; endmodule module tb; endmodule'),
+            ("unresolved import", self.root / "src/tb.v", 'module tb; missing dut(); endmodule'),
             ("no exported top-symbol", self.root / "configuration.toml", (self.root / "configuration.toml").read_text().replace('top-symbol = "tb"', 'top-symbol = "missing"')),
         )
         for error, path, content in cases:
@@ -432,20 +426,14 @@ class BuildSystemTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "Icarus Verilog unavailable")
     def test_only_reachable_source_dependencies_block_a_target(self) -> None:
-        metadata = self.root / "src/tb.toml"
-        original = metadata.read_text()
+        source = self.root / "src/tb.v"
+        original = source.read_text()
         (self.root / "src/unused.v").write_text("module unused; endmodule\n")
-        (self.root / "src/other.v").write_text("module other; endmodule\n")
-        (self.root / "src/other.toml").write_text(
-            '[[module.export]]\nname = "other"\n[[module.import]]\nname = "unused"\n'
-        )
+        (self.root / "src/other.v").write_text("module other; unused dut(); endmodule\n")
         for dependency, error in (("missing", "unresolved import"), ("other", "cyclic source dependency")):
             with self.subTest(dependency=dependency):
-                (self.root / "src/unused.toml").write_text(
-                    '[[module.export]]\nname = "unused"\n'
-                    f'[[module.import]]\nname = "{dependency}"\n'
-                )
-                metadata.write_text(original)
+                (self.root / "src/unused.v").write_text(f'module unused; {dependency} dut(); endmodule')
+                source.write_text(original)
                 selected = self.cli("simulate", "demo")
                 self.assertEqual(selected.returncode, 0, selected.stderr)
                 self.assertNotIn("unused.v", (self.root / "build/auxiliary/demo.f").read_text())
@@ -453,21 +441,20 @@ class BuildSystemTests(unittest.TestCase):
                     full = self.cli(command)
                     self.assertNotEqual(full.returncode, 0)
                     self.assertIn(error, full.stderr)
-                    self.assertIn(".toml", full.stderr)
-                metadata.write_text(original + '[[module.import]]\nname = "unused"\n')
+                    self.assertIn(".v", full.stderr)
+                source.write_text(original.replace('endmodule', 'unused extra(); endmodule'))
                 reachable = self.cli("build", "demo")
                 self.assertNotEqual(reachable.returncode, 0)
                 self.assertIn(error, reachable.stderr)
-                self.assertIn(".toml", reachable.stderr)
+                self.assertIn(".v", reachable.stderr)
 
     def test_source_index_errors_still_block_selected_builds(self) -> None:
         (self.root / "src/unused.v").write_text("module unused; endmodule\n")
-        metadata = self.root / "src/unused.toml"
-        for content, error in ((None, "unused.toml"), ("broken [", "unused.toml"),
-                               ('[[module.export]]\nname = "core"\n', "duplicate export")):
+        source = self.root / "src/unused.v"
+        for content, error in (("module unused( ; endmodule", "unused.v"),
+                               ("module core; endmodule", "duplicate export")):
             with self.subTest(error=error, content=content):
-                if content is not None:
-                    metadata.write_text(content)
+                source.write_text(content)
                 result = self.cli("build", "demo")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(error, result.stderr)
@@ -497,7 +484,7 @@ class BuildSystemTests(unittest.TestCase):
         for path in (simulation, program):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("result")
-        local = self.root / "build/fpga/ego1.toml"
+        local = self.root / ".buildsys/fpga/ego1.toml"
         local.write_text("broken TOML [")
         shutil.rmtree(self.root / "src")
         shutil.rmtree(self.root / "constraints")

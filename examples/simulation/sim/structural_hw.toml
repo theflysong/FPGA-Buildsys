@@ -1,5 +1,0 @@
-[[module.export]]
-name = "tb_shw"
-
-[[module.import]]
-name = "structural_hw"

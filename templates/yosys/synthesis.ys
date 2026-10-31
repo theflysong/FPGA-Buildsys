@@ -1,4 +1,4 @@
-read_verilog -sv $(sources)
+read_verilog -sv $(hdl_options) $(sources)
 synth_xilinx -family xc7 -top $(top)
 check -assert
 stat

@@ -26,7 +26,6 @@ class ArtifactTests(unittest.TestCase):
         self.root = Path(temporary.name)
         (self.root / "src").mkdir()
         (self.root / "src/top.v").write_text("module top; endmodule")
-        (self.root / "src/top.toml").write_text('[[module.export]]\nname="top"\n')
         (self.root / "configuration.toml").write_text(
             'name="Products"\nid="workspace"\n[directories]\nsources=["src"]\n'
             '[[simulation]]\nid="first"\ntop-symbol="top"\n'
@@ -90,8 +89,8 @@ class ArtifactTests(unittest.TestCase):
             path = Layout(self.root).simulation(item, "vvp")
             path.parent.mkdir(parents=True)
             path.touch()
-        settings = self.root / "build/fpga/board.toml"
-        settings.parent.mkdir()
+        settings = self.root / ".buildsys/fpga/board.toml"
+        settings.parent.mkdir(parents=True)
         settings.write_text("user settings")
         legacy = self.root / "build/vvp/old.vvp"
         legacy.parent.mkdir()

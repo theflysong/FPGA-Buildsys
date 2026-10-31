@@ -1,5 +1,0 @@
-[[module.export]]
-name = "Bin2Bcd"
-
-[[module.export]]
-name = "Bcd2Seg7"

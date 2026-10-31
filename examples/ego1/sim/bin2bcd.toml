@@ -1,5 +1,0 @@
-[[module.export]]
-name = "tb_Bin2Bcd"
-
-[[module.import]]
-name = "Bin2Bcd"

@@ -1,5 +1,0 @@
-[[module.export]]
-name = "tb_Driver7Seg"
-
-[[module.import]]
-name = "Driver7Seg"

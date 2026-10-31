@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
+from dataclasses import replace
 import importlib.util
 import io
 import json
@@ -17,7 +18,7 @@ from unittest.mock import patch
 
 import main
 from completion_ids import candidate_ids
-from models import XprProject
+from models import SourceModel, SourceSymbols, XprProject
 from task.configure import configure as configure_project
 from task.model import build_model
 from toolchains import select_toolchain
@@ -131,22 +132,10 @@ class XprTests(unittest.TestCase):
         (self.root / "constraints").mkdir()
         self.leaf = self.root / "src/leaf {$[literal]}.sv"
         self.leaf.write_text("module leaf; endmodule\n")
-        self.leaf.with_suffix(".toml").write_text('[[module.export]]\nname = "leaf"\n')
         (self.root / "src/top.v").write_text("module top; leaf dut(); endmodule\n")
-        (self.root / "src/top.toml").write_text(
-            '[[module.export]]\nname = "top"\n[[module.import]]\nname = "leaf"\n'
-        )
         (self.root / "src/helper.sv").write_text("module helper; endmodule\n")
-        (self.root / "src/helper.toml").write_text('[[module.export]]\nname = "helper"\n')
         (self.root / "sim/first.v").write_text("module tb_first; top dut(); helper utils(); endmodule\n")
-        (self.root / "sim/first.toml").write_text(
-            '[[module.export]]\nname = "tb_first"\n'
-            '[[module.import]]\nname = "top"\n[[module.import]]\nname = "helper"\n'
-        )
         (self.root / "sim/second.v").write_text("module tb_second; leaf dut(); endmodule\n")
-        (self.root / "sim/second.toml").write_text(
-            '[[module.export]]\nname = "tb_second"\n[[module.import]]\nname = "leaf"\n'
-        )
         (self.root / "constraints/board.xdc").write_text("# XDC\n")
         self.config = self.root / "configuration.toml"
         self.original = (
@@ -177,7 +166,7 @@ class XprTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(ENTRY), "--project", str(self.root), *args],
                               env=self.env, cwd=self.root.parent, capture_output=True, text=True, timeout=20)
 
-    def fake_export(self):
+    def fake_export(self, project=None):
         import tkinter
         namespace = {}
         with patch.dict(os.environ, XPR_CALLS=str(self.calls)):
@@ -198,9 +187,11 @@ class XprTests(unittest.TestCase):
                 return lambda *args: tcl.eval(name + " " + " ".join(map(str, args)))
 
         output, errors = io.StringIO(), io.StringIO()
+        model = patch("planner.build_model", return_value=project) if project is not None else nullcontext()
         with patch.dict(sys.modules, pytcl=SimpleNamespace(Vivado=Vivado, TCLError=tkinter.TclError)), \
                 patch.dict(os.environ, XPR_CALLS=str(self.calls)), \
                 patch("task.vivado.xpr.shutil.which", return_value="vivado"), \
+                model, \
                 redirect_stdout(output), redirect_stderr(errors):
             result = main.main(["--project", str(self.root), "xpr"])
         return SimpleNamespace(returncode=result, stdout=output.getvalue(), stderr=errors.getvalue())
@@ -247,13 +238,48 @@ class XprTests(unittest.TestCase):
             configure(self.root, "xpr")
 
     def test_all_target_dependencies_and_directory_roles(self):
-        (self.root / "sim/second.toml").write_text('[[module.export]]\nname="tb_second"\n[[module.import]]\nname="missing"\n')
+        (self.root / "sim/second.v").write_text('module tb_second; missing dut(); endmodule')
         with self.assertRaisesRegex(ConfigError, "unresolved import"):
             configure(self.root, "xpr")
-        (self.root / "sim/second.toml").write_text('[[module.export]]\nname="tb_second"\n')
-        (self.root / "src/top.toml").write_text('[[module.export]]\nname="top"\n[[module.import]]\nname="tb_second"\n')
+        (self.root / "sim/second.v").write_text('module tb_second; endmodule')
+        (self.root / "src/top.v").write_text('module top; tb_second dut(); endmodule')
         with self.assertRaisesRegex(ConfigError, "directories.simulation"):
             configure(self.root, "xpr")
+
+    @unittest.skipUnless(HAS_TCL, "Requires Tcl")
+    def test_headers_include_directories_and_macros_reach_filesets(self):
+        headers = self.root / "headers } 中文"
+        headers.mkdir()
+        (headers / "leaf.svh").write_text('`define LEAF leaf\n')
+        (headers / "outer.vh").write_text('`include "leaf.svh"\n')
+        (self.root / "src/top.v").write_text('`include "outer.vh"\n'
+            'module top; `ifdef FEATURE\n`LEAF dut();\n`endif\nendmodule')
+        self.config.write_text(self.original + '[hdl]\ninclude-dirs=["headers } 中文"]\n'
+                               'defines={FEATURE="1",TEXT=\'"a b $[]"\'}\n', encoding="utf-8")
+        # Exercise the backend's model-to-Tcl boundary independently of parsing.
+        project = configure_project(self.root, "xpr")
+        leaf = self.leaf.relative_to(self.root).as_posix()
+        sources = {
+            leaf: SourceModel(SourceSymbols((), ("leaf",)), (), ()),
+            "src/helper.sv": SourceModel(SourceSymbols((), ("helper",)), (), ()),
+            "src/top.v": SourceModel(SourceSymbols(("leaf",), ("top",)), (leaf,), (leaf,),
+                                      ("headers } 中文/leaf.svh", "headers } 中文/outer.vh")),
+            "sim/first.v": SourceModel(SourceSymbols(("top", "helper"), ("tb_first",)),
+                                       ("src/top.v", "src/helper.sv"), (leaf, "src/helper.sv", "src/top.v")),
+            "sim/second.v": SourceModel(SourceSymbols(("leaf",), ("tb_second",)), (leaf,), (leaf,)),
+        }
+        exports = {name: path for path, item in sources.items() for name in item.symbols.exports}
+        result = self.fake_export(replace(project, sources=sources, exports=exports))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        import tkinter
+        tcl = tkinter.Tcl()
+        include_dirs = next(row[2] for row in calls if row[:2] == ["set_property", "include_dirs"])
+        self.assertEqual(tcl.splitlist(include_dirs), (headers.as_posix(),))
+        defines = next(row[2] for row in calls if row[:2] == ["set_property", "verilog_define"])
+        self.assertEqual(tcl.splitlist(defines), ("FEATURE=1", 'TEXT="a b $[]"'))
+        for file_type, header in (("Verilog Header", "outer.vh"), ("SystemVerilog Header", "leaf.svh")):
+            self.assertIn(["set_property", "file_type", file_type, str(headers / header)], calls)
 
     @unittest.skipUnless(HAS_TCL, "Requires Tcl")
     def test_single_export_multiple_parts_and_independent_simulation_closures(self):
@@ -280,7 +306,7 @@ class XprTests(unittest.TestCase):
                            "-constrset", "constrs_" + identifier, "-part", part], calls)
         self.assertIn(["current_run", "-synthesis", "synth_core"], calls)
         self.assertIn(["current_fileset", "-simset", "sim_first"], calls)
-        self.assertFalse((self.root / "build/fpga").exists())
+        self.assertFalse((self.root / ".buildsys/fpga").exists())
         self.assertFalse((self.root / "jobs.sh").exists())
 
     @unittest.skipUnless(HAS_TCL, "Requires Tcl")

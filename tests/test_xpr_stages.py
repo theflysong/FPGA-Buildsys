@@ -66,7 +66,7 @@ class XprStageTests(unittest.TestCase):
         )
         self.assertEqual(self.xpr.read_text(), "existing project - never replace")
         self.assertFalse((self.root / "build/model").exists())
-        self.assertFalse((self.root / "build/fpga").exists())
+        self.assertFalse((self.root / ".buildsys/fpga").exists())
         return result
 
     def calls(self, name=None):

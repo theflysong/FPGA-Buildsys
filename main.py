@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Verilog simulations and FPGA programs described by configuration.toml."""
+"""Build Verilog/SystemVerilog simulations and FPGA programs from configuration.toml."""
 
 from __future__ import annotations
 

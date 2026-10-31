@@ -1,5 +1,0 @@
-[[module.export]]
-name = "tbSimulation"
-
-[[module.import]]
-name = "example"

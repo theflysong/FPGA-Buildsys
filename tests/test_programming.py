@@ -27,7 +27,6 @@ class ProgrammingTests(unittest.TestCase):
         (self.root / "constraints").mkdir()
         (self.root / "constraints/board.xdc").write_text("# constraints\n")
         (self.root / "src/top.v").write_text("module top; endmodule\n")
-        (self.root / "src/top.toml").write_text('[[module.export]]\nname = "top"\n')
         (self.root / "configuration.toml").write_text(
             'name = "Programming test"\nid = "example"\n[directories]\nsources = ["src"]\nconstraints = ["constraints"]\n[[fpga]]\nid = "ego1"\npart = "xc7a35tcsg324-1"\n[[project]]\nid = "coreprog"\nfpga = "ego1"\ntop-symbol = "top"\nconstraints = "board.xdc"\n'
         )
@@ -132,7 +131,7 @@ sys.exit(3)
             '[[project]]\nid = "coreprog"\nfpga = "ego1"\n'
             '[[simulation]]\nid = "unfinished"\n'
         )
-        local = self.root / "build/fpga/ego1.toml"
+        local = self.root / ".buildsys/fpga/ego1.toml"
         for settings in (
             None,
             'xray-database = ""\nPYTHONPATH = ["missing python directory"]\n',
@@ -157,7 +156,7 @@ sys.exit(3)
                 self.assertEqual(direct.returncode, 0, direct.stderr)
 
     def test_program_uses_configured_toolchain_and_validates_its_own_settings(self) -> None:
-        local = self.root / "build/fpga/ego1.toml"
+        local = self.root / ".buildsys/fpga/ego1.toml"
         local.write_text('toolchain-root = ["tools"]\nPYTHONPATH = ["missing"]\n')
         self.env["PATH"] = os.environ["PATH"]
         result = self.cli("program", "coreprog", "--protocol", "ft2232")

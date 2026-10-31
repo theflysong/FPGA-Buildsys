@@ -88,7 +88,7 @@ class TemplateTests(unittest.TestCase):
                                     cwd=root, env=env, capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((root / "build-arguments").read_text().splitlines(), [
-                "-g2012", "-Wall", "-s", "tb$top", "-f", "build/auxiliary/test.f",
+                "-g2012", "-grelative-include", "-Wall", "-s", "tb$top", "-f", "build/auxiliary/test.f",
                 '-D__VCD_FILE__="build/output \'$(literal) & spaces/test.vcd"',
                 "-o", "build/output '$(literal) & spaces/test.vvp",
             ])

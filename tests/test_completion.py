@@ -175,7 +175,7 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(set(self.query("cleandist", "")), {"tb_first", "tb_second", "first_program"})
         self.assertFalse((self.root / "build").exists())
         # Invalid private configuration has no bearing on completion.
-        local = self.root / "build/fpga/ego1.toml"
+        local = self.root / ".buildsys/fpga/ego1.toml"
         local.parent.mkdir(parents=True)
         local.write_text("invalid TOML [")
         self.assertEqual(self.query("program", ""), ["first_program"])
@@ -386,7 +386,7 @@ if (( ${#COMPREPLY[@]} )); then printf '%s\\n' "${COMPREPLY[@]}"; fi
                 self.assertEqual(result.stdout.splitlines(), expected)
         self.assertFalse((self.base / "side-effects").exists())
         self.assertFalse(self.auxiliary.exists())
-        self.assertFalse((self.root / "build/fpga").exists())
+        self.assertFalse((self.root / ".buildsys/fpga").exists())
 
 
 if __name__ == "__main__":

@@ -7,5 +7,5 @@ if [[ ! -f "$filelist" ]]; then
   exit 2
 fi
 mkdir -p -- "$(dirname -- "$vvp_file")" "$(dirname -- "$vcd_file")"
-iverilog -g2012 -Wall -s $(top) -f "$filelist" "-D__VCD_FILE__=\"$vcd_file\"" -o "$vvp_file"
+iverilog -g2012 -grelative-include -Wall $(hdl_options) -s $(top) -f "$filelist" "-D__VCD_FILE__=\"$vcd_file\"" -o "$vvp_file"
 $(report)

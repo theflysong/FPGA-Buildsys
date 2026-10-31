@@ -22,19 +22,15 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         select_toolchain(self.root, "yosys")
-        self.local = self.root / "build/fpga/ego1.toml"
+        self.local = self.root / ".buildsys/fpga/ego1.toml"
         self.config = self.root / "configuration.toml"
         (self.root / "src").mkdir()
         (self.root / "constraints").mkdir()
         (self.root / "constraints/board.xdc").write_text("# test constraints\n")
         (self.root / "src/core.v").write_text("module core; endmodule\n")
-        (self.root / "src/core.toml").write_text('[[module.export]]\nname = "core"\n')
         (self.root / "src/tb.v").write_text(
             'module tb; core dut(); initial begin $dumpfile(`__VCD_FILE__); '
             '$dumpvars(0, tb); #1 $finish; end endmodule\n'
-        )
-        (self.root / "src/tb.toml").write_text(
-            '[[module.export]]\nname = "tb"\n[[module.import]]\nname = "core"\n'
         )
         self.config.write_text(
             'name = "Mixed project"\nid = "mixed"\n[directories]\nsources = ["src"]\nconstraints = ["constraints"]\n[[simulation]]\nid = "demo"\ntop-symbol = "tb"\ntimescale = "1ns/1ps"\n[[fpga]]\nid = "ego1"\npart = "xc7a35tcsg324-1"\n[[project]]\nid = "main"\nfpga = "ego1"\ntop-symbol = "core"\nconstraints = "board.xdc"\n'
@@ -68,9 +64,10 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.assertIn(str(self.local), result.stderr)
         self.assertIn("toolchain-root is optional", result.stderr)
         self.assertEqual(self.local.stat().st_mode & 0o777, 0o666 if os.name == "nt" else 0o600)
-        self.assertIn('xray-database = ""', self.local.read_text())
-        self.assertIn('toolchain-root = []', self.local.read_text())
-        self.assertIn('PYTHONPATH = []', self.local.read_text())
+        template = self.local.read_text(encoding="utf-8")
+        self.assertIn('xray-database = ""', template)
+        self.assertIn('toolchain-root = []', template)
+        self.assertIn('PYTHONPATH = []', template)
         self.assertEqual(self.config.read_bytes(), original)
         self.assertTrue((self.root / "build/auxiliary/main.ys").is_file())
         self.assertTrue((self.root / "build/auxiliary/demo.f").is_file())
@@ -128,12 +125,12 @@ class FpgaConfigurationTests(unittest.TestCase):
         script = (self.root / "build/jobs/main/synthesis.sh").read_text()
         self.assertIn(str(self.root / "database"), script)
         self.assertIn(str(toolchain), script)
-        self.assertFalse((self.root / "build/fpga/other.toml").exists())
+        self.assertFalse((self.root / ".buildsys/fpga/other.toml").exists())
         calls = (self.root / "calls").read_bytes()
         pending = self.cli("synthesis", "other_main", env=env)
         self.assertNotEqual(pending.returncode, 0)
         self.assertIn("other.toml", pending.stderr)
-        self.assertEqual((self.root / "build/fpga/other.toml").stat().st_mode & 0o777, 0o600)
+        self.assertEqual((self.root / ".buildsys/fpga/other.toml").stat().st_mode & 0o777, 0o600)
         self.assertEqual((self.root / "calls").read_bytes(), calls)
         # Reload an absolute database path and a relative toolchain path.
         self.local.write_text(f'xray-database = "{self.root / "database"}"\nPYTHONPATH = ["src"]\ntoolchain-root = ["toolchain with spaces"]\n')
@@ -183,9 +180,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         self.config.write_text(original)
         (self.root / "constraints/board.xdc").unlink()
         # The testbench's missing dependency is outside the program's closure.
-        (self.root / "src/tb.toml").write_text(
-            '[[module.export]]\nname = "tb"\n[[module.import]]\nname = "absent"\n'
-        )
+        (self.root / "src/tb.v").write_text('module tb; absent dut(); endmodule')
         result = self.cli("synthesis", "main", env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / "build/yosys/main/main.json").read_text(), '{"modules":{}}\n')

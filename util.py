@@ -75,27 +75,18 @@ def output_name(value: str, location: str) -> str:
     return value
 
 
-def metadata_symbols(table: dict, key: str, path: Path) -> tuple[str, ...]:
-    entries = table.get(key, [])
-    if not isinstance(entries, list):
-        raise ConfigError(f"{path}: module.{key} must be an array of tables")
-    result: list[str] = []
-    for index, entry in enumerate(entries, 1):
-        location = f"{path}: module.{key}[{index}]"
-        if not isinstance(entry, dict):
-            raise ConfigError(f"{location}: expected a table")
-        result.append(required_string(entry, "name", location, SYMBOL_RE))
-    if len(result) != len(set(result)):
-        raise ConfigError(f"{path}: duplicate module.{key} symbol")
-    return tuple(result)
-
-
 def source_closure(project: Project, top: str) -> list[str]:
     return source_order(project, project.exports[top])
 
 
 def source_order(project: Project, source: str) -> list[str]:
     return [*project.sources[source].closure, source]
+
+
+def hdl_arguments(project: Project) -> list[str]:
+    """Common explicit preprocessing options, quoted by each backend at use."""
+    return [*("-I" + path.relative_to(project.root).as_posix() for path in project.hdl.include_dirs),
+            *(f"-D{name}={value}" for name, value in project.hdl.defines)]
 
 
 def relative(project: Project, path: Path) -> str:
@@ -143,7 +134,7 @@ def task_header(project: Project, *, temporary: bool = False) -> list[str]:
 
 
 def fpga_config_path(root: Path, identifier: str) -> Path:
-    return root / "build" / "fpga" / f"{identifier}.toml"
+    return root / ".buildsys" / "fpga" / f"{identifier}.toml"
 
 
 def toolchain_header(toolchain_roots: tuple[Path, ...]) -> list[str]:

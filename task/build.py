@@ -9,7 +9,7 @@ from artifacts import shell_report, target_artifacts
 from models import Project, Simulation
 from util import (
     add_target_argument as add_arguments, execute_job, relative,
-    task_header, write_template,
+    task_header, write_template, hdl_arguments,
     require_simulation as validate,
 )
 
@@ -23,6 +23,7 @@ def generate_script(project: Project, simulation: Simulation) -> None:
                    header="\n".join(task_header(project)), filelist=shlex.quote(filelist),
                    vvp_file=shlex.quote(vvp_file), vcd_file=shlex.quote(vcd_file),
                    top=shlex.quote(simulation.top),
+                   hdl_options=" ".join(shlex.quote(option) for option in hdl_arguments(project)),
                    report=shell_report(project, target_artifacts(simulation, waveforms=False)))
 
 

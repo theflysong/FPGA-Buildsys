@@ -9,14 +9,15 @@ from pathlib import Path
 import re
 
 from models import Project, Simulation, SourceModel, SourceSymbols, SynthesisProgram
-from util import ConfigError, metadata_symbols, project_path, read_toml
+from hdl import ParsedSource, parse_source
+from util import ConfigError, project_path
 
 
 FULL_COMMANDS = {"model", "auxiliary", "script"}
 HASH_JSON_RE = re.compile(r"[0-9a-f]{64}\.json\Z")
 
 
-def source_index(project: Project) -> tuple[dict[str, str], dict[str, SourceSymbols]]:
+def source_index(project: Project) -> tuple[dict[str, str], dict[str, ParsedSource]]:
     sources: set[Path] = set()
     config_path = project.root / "configuration.toml"
     for directory in dict.fromkeys((*project.source_directories, *project.simulation_directories)):
@@ -29,28 +30,27 @@ def source_index(project: Project) -> tuple[dict[str, str], dict[str, SourceSymb
         raise ConfigError(f"{config_path}: no Verilog source files in configured source directories")
 
     exports: dict[str, str] = {}
-    symbols: dict[str, SourceSymbols] = {}
+    parsed: dict[str, ParsedSource] = {}
     for source in sorted(sources):
-        metadata_path = source.with_suffix(".toml")
-        module = read_toml(metadata_path).get("module")
-        if not isinstance(module, dict):
-            raise ConfigError(f"{metadata_path}: [module] metadata is required")
         path = source.relative_to(project.root).as_posix()
-        imported = tuple(sorted(metadata_symbols(module, "import", metadata_path)))
-        exported = tuple(sorted(metadata_symbols(module, "export", metadata_path)))
-        symbols[path] = SourceSymbols(imported, exported)
-        for symbol in exported:
+        parsed[path] = parse_source(project.root, source, project.hdl)
+        for symbol in parsed[path].symbols.exports:
             if symbol in exports:
                 raise ConfigError(
-                    f"{metadata_path}: duplicate export {symbol!r}; already exported by {exports[symbol]}"
+                    f"{parsed[path].locations[symbol]}: duplicate export {symbol!r}; "
+                    f"already exported by {exports[symbol]}"
                 )
             exports[symbol] = path
-    return exports, symbols
+    interfaces = {name for item in parsed.values() for name in item.interfaces}
+    for path, item in parsed.items():
+        imported = set(item.symbols.imports) | (set(item.named_types) & interfaces)
+        parsed[path] = replace(item, symbols=SourceSymbols(tuple(sorted(imported)), item.symbols.exports))
+    return exports, parsed
 
 
 def build_model(project: Project) -> Project:
-    """Validate metadata globally, then resolve only the required file graph."""
-    exports, symbols = source_index(project)
+    """Parse sources globally, then resolve only the required file graph."""
+    exports, parsed = source_index(project)
     roots: set[str] = set()
     targets = [
         ("simulation" if isinstance(target, Simulation) else "project", target.identifier, target.top)
@@ -67,7 +67,7 @@ def build_model(project: Project) -> Project:
             )
         roots.add(exports[top])
     if project.command in FULL_COMMANDS:
-        roots.update(symbols)
+        roots.update(parsed)
 
     sources: dict[str, SourceModel] = {}
     visiting: set[str] = set()
@@ -75,14 +75,15 @@ def build_model(project: Project) -> Project:
     def visit(path: str) -> SourceModel:
         if path in sources:
             return sources[path]
-        metadata_path = project.root / Path(path).with_suffix(".toml")
+        source_path = project.root / path
         if path in visiting:
-            raise ConfigError(f"{metadata_path}: cyclic source dependency")
+            raise ConfigError(f"{source_path}: cyclic source dependency")
         visiting.add(path)
         dependencies: set[str] = set()
-        for symbol in symbols[path].imports:
+        for symbol in parsed[path].symbols.imports:
             if symbol not in exports:
-                raise ConfigError(f"{metadata_path}: unresolved import {symbol!r}")
+                location = parsed[path].locations.get(symbol, str(source_path))
+                raise ConfigError(f"{location}: unresolved import {symbol!r}")
             if exports[symbol] != path:
                 dependencies.add(exports[symbol])
         closure: dict[str, None] = {}
@@ -90,7 +91,7 @@ def build_model(project: Project) -> Project:
             closure.update(dict.fromkeys(visit(dependency).closure))
             closure[dependency] = None
         visiting.remove(path)
-        source = SourceModel(symbols[path], tuple(sorted(dependencies)), tuple(closure))
+        source = SourceModel(parsed[path].symbols, tuple(sorted(dependencies)), tuple(closure), parsed[path].includes)
         sources[path] = source
         return source
 
@@ -101,7 +102,7 @@ def build_model(project: Project) -> Project:
         for source in (*sources[path].closure, path):
             if project.is_simulation_source(source):
                 raise ConfigError(
-                    f"{project.root / Path(source).with_suffix('.toml')}: "
+                    f"{project.root / source}: "
                     f"project {target.identifier!r} depends on a file in directories.simulation"
                 )
     return replace(project, exports=exports, sources=sources)
@@ -121,7 +122,8 @@ def generate_model(project: Project) -> None:
         expected.add(filename)
         records = (
             (project.symbol_dir, {"path": path, "import": source.symbols.imports, "export": source.symbols.exports}),
-            (project.model_dir, {"path": path, "dependencies": source.dependencies, "closure": source.closure}),
+            (project.model_dir, {"path": path, "dependencies": source.dependencies,
+                                 "closure": source.closure, "includes": source.includes}),
         )
         for directory, record in records:
             content = json.dumps(record, ensure_ascii=False, indent=2) + "\n"

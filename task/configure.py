@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from models import (
-    CleanupTarget, Fpga, ImplementationProgram, Program, ProgrammingTarget,
+    CleanupTarget, Fpga, HdlOptions, ImplementationProgram, Program, ProgrammingTarget,
     Project, Simulation, SynthesisProgram,
 )
 from layout import Layout
@@ -106,7 +106,33 @@ def configure(root: Path, command: str = "script", target_id: str | None = None)
     root = root.expanduser().resolve()
     command = resolve_command(root, command)
     toolchain = command_toolchain(root, command)
-    return replace(_configure(root, command, target_id, toolchain), toolchain=toolchain)
+    project = _configure(root, command, target_id, toolchain)
+    if project.source_directories:
+        project = replace(project, hdl=hdl_options(root, read_toml(root / "configuration.toml")))
+    return replace(project, toolchain=toolchain)
+
+
+def hdl_options(root: Path, data: dict) -> HdlOptions:
+    location = f"{root / 'configuration.toml'}: hdl"
+    table = data.get("hdl", {})
+    if not isinstance(table, dict):
+        raise ConfigError(f"{location}: expected a table")
+    if unknown := table.keys() - {"include-dirs", "defines"}:
+        raise ConfigError(f"{location}: unknown fields: {', '.join(sorted(unknown))}")
+    paths = string_list({"include-dirs": [], **table}, "include-dirs", location)
+    directories = tuple(dict.fromkeys(project_path(root, value, location) for value in paths))
+    for directory in directories:
+        if not directory.is_dir():
+            raise ConfigError(f"{location}: include directory does not exist: {directory}")
+    defines = table.get("defines", {})
+    if not isinstance(defines, dict):
+        raise ConfigError(f"{location}: defines must be a table of string values")
+    for name, value in defines.items():
+        if not SYMBOL_RE.fullmatch(name) or name == "__VCD_FILE__":
+            raise ConfigError(f"{location}: invalid or reserved macro name: {name!r}")
+        if not isinstance(value, str) or any(char in value for char in "\r\n\0"):
+            raise ConfigError(f"{location}: define {name!r} must be a single-line string")
+    return HdlOptions(directories, tuple(sorted(defines.items())))
 
 
 def _configure(root: Path, command: str, target_id: str | None, toolchain: str | None) -> Project:

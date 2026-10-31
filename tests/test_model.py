@@ -43,11 +43,10 @@ class ModelTests(unittest.TestCase):
     def source(self, path: str, exports: tuple[str, ...], imports: tuple[str, ...] = ()) -> None:
         source = self.root / path
         source.parent.mkdir(parents=True, exist_ok=True)
-        source.write_text("\n".join(f"module {name}; endmodule" for name in exports), encoding="utf-8")
-        source.with_suffix(".toml").write_text(
-            "".join(f'[[module.export]]\nname = "{name}"\n' for name in exports)
-            + "".join(f'[[module.import]]\nname = "{name}"\n' for name in imports), encoding="utf-8",
-        )
+        instances = " ".join(f"{name} dependency_{index}();" for index, name in enumerate(imports))
+        source.write_text("\n".join(
+            f"module {name}; {instances if index == 0 else ''} endmodule"
+            for index, name in enumerate(exports)), encoding="utf-8")
 
     def cli(self, command: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([sys.executable, str(ENTRY), "--project", str(self.root), command],
@@ -57,12 +56,12 @@ class ModelTests(unittest.TestCase):
         name = hashlib.sha256(path.encode("utf-8")).hexdigest() + ".json"
         return json.loads((self.root / "build" / directory / name).read_text(encoding="utf-8"))
 
-    def test_model_command_needs_only_common_configuration_and_metadata(self) -> None:
+    def test_model_command_needs_only_common_configuration_and_sources(self) -> None:
         self.config.write_text(self.original.replace(
             'vvp = "build/vvp"\nvcd = "build/vcd"\n', ''
         ).replace('top-symbol = "tb"\ntimescale = "1ns/1ps"\n', '')
             + '[[project]]\nid = "unfinished"\n[[fpga]]\nid = "board"\n', encoding="utf-8")
-        local = self.root / "build/fpga/board.toml"
+        local = self.root / ".buildsys/fpga/board.toml"
         local.parent.mkdir(parents=True)
         local.write_text("broken TOML [", encoding="utf-8")
         before = local.read_bytes(), local.stat().st_mtime_ns
@@ -80,11 +79,12 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(self.load("symbol", "src/leaf.v"),
                          {"path": "src/leaf.v", "import": [], "export": ["leaf", "leaf_alias"]})
         self.assertEqual(self.load("model", "src/left.v"), {
-            "path": "src/left.v", "dependencies": ["src/leaf.v"], "closure": ["src/leaf.v"],
+            "path": "src/left.v", "dependencies": ["src/leaf.v"], "closure": ["src/leaf.v"], "includes": [],
         })
         self.assertEqual(self.load("model", "sim/test.v"), {
             "path": "sim/test.v", "dependencies": ["src/left.v", "src/right.sv"],
             "closure": ["src/leaf.v", "src/left.v", "src/right.sv"],
+            "includes": [],
         })
         self.assertEqual(source_closure(project, "tb"),
                          ["src/leaf.v", "src/left.v", "src/right.sv", "sim/test.v"])
@@ -158,19 +158,16 @@ class ModelTests(unittest.TestCase):
                 result = self.cli("script")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message, result.stderr)
-                self.assertIn(".toml", result.stderr)
+                self.assertIn(".v", result.stderr)
                 self.assertFalse((self.root / "build").exists())
 
-    def test_global_metadata_errors_block_selected_targets(self) -> None:
+    def test_global_syntax_and_duplicate_errors_block_selected_targets(self) -> None:
         self.source("src/unused.v", ("unused",))
-        metadata = self.root / "src/unused.toml"
-        for text, message in ((None, "unused.toml"), ("broken [", "unused.toml"),
-                              ('[[module.export]]\nname = "tb"\n', "duplicate export")):
+        source = self.root / "src/unused.v"
+        for text, message in (("module unused( ; endmodule", "unused.v"),
+                              ("module tb; endmodule", "duplicate export")):
             with self.subTest(message=message):
-                if text is None:
-                    metadata.unlink()
-                else:
-                    metadata.write_text(text)
+                source.write_text(text)
                 with self.assertRaisesRegex(ConfigError, message):
                     build_model(configure(self.root, "build", "test"))
 
@@ -181,10 +178,10 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(project.sources["src/leaf.v"].closure, ())
 
     def test_configuration_does_not_scan_sources(self) -> None:
-        (self.root / "src/leaf.toml").unlink()
+        (self.root / "src/leaf.v").write_text("module leaf( ; endmodule")
         project = configure(self.root, "build", "test")
         self.assertEqual(project.sources, {})
-        with self.assertRaisesRegex(ConfigError, "leaf.toml"):
+        with self.assertRaisesRegex(ConfigError, "leaf.v"):
             build_model(project)
 
     def test_cleanup_scripts_forward_to_python_and_preserve_models(self):
@@ -202,7 +199,7 @@ class ModelTests(unittest.TestCase):
         self.assertFalse(project.model_dir.exists())
         self.assertFalse(project.symbol_dir.exists())
 
-    def test_metadata_errors_precede_fpga_settings_initialization(self) -> None:
+    def test_source_errors_precede_fpga_settings_initialization(self) -> None:
         (self.root / "constraints").mkdir()
         (self.root / "constraints/board.xdc").write_text("# constraints")
         self.config.write_text(self.original.replace('[directories]\n',
@@ -216,7 +213,7 @@ class ModelTests(unittest.TestCase):
         self.source("src/left.v", ("left",), ("leaf",))
         success = self.cli("script")
         self.assertEqual(success.returncode, 0, success.stderr)
-        self.assertTrue((self.root / "build/fpga/board.toml").exists())
+        self.assertTrue((self.root / ".buildsys/fpga/board.toml").exists())
 
 
 if __name__ == "__main__":

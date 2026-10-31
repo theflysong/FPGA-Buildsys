@@ -131,6 +131,13 @@ class SourceModel:
     symbols: SourceSymbols
     dependencies: tuple[str, ...]
     closure: tuple[str, ...]
+    includes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class HdlOptions:
+    include_dirs: tuple[Path, ...] = ()
+    defines: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -153,6 +160,7 @@ class Project:
     exports: dict[str, str] = field(default_factory=dict)
     sources: dict[str, SourceModel] = field(default_factory=dict)
     toolchain: str | None = None
+    hdl: HdlOptions = field(default_factory=HdlOptions)
 
     def is_simulation_source(self, source: str) -> bool:
         return any((self.root / source).is_relative_to(directory) for directory in self.simulation_directories)

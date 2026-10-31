@@ -56,12 +56,30 @@ def _export(project: Project, target_id: str | None,
             return vivado.eval(tcl_word(command))
 
         def files(fileset: str, sources: list[str], top: str) -> None:
+            headers = sorted({header for source in sources for header in project.sources[source].includes})
             for source in sources:
                 vivado.add_files("-norecurse", "-fileset", fileset, tcl_word(project.root / source))
+            for header in headers:
+                if header not in sources:
+                    vivado.add_files("-norecurse", "-fileset", fileset, tcl_word(project.root / header))
+            # File names may contain glob metacharacters. Compare normalized
+            # paths exactly instead of passing user paths as get_files patterns.
+            header_paths = " ".join(f"[file normalize {tcl_word(project.root / header)}]"
+                                    for header in headers if header not in sources)
+            evaluate(f"set buildsys_headers [list {header_paths}]")
+            evaluate(f"foreach buildsys_file [get_files -of_objects [get_filesets {tcl_word(fileset)}]] {{\n"
+                     "if {[lsearch -exact $buildsys_headers [file normalize $buildsys_file]] >= 0} {\n"
+                     "if {[file extension $buildsys_file] eq {.svh}} {\n"
+                     "set_property file_type {SystemVerilog Header} $buildsys_file\n"
+                     "} else {\nset_property file_type {Verilog Header} $buildsys_file\n}\n"
+                     "} else {\nset_property file_type SystemVerilog $buildsys_file\n}\n}")
+            for key, values in (
+                ("include_dirs", [path.as_posix() for path in project.hdl.include_dirs]),
+                ("verilog_define", [f"{name}={value}" for name, value in project.hdl.defines]),
+            ):
+                words = " ".join(tcl_word(value) for value in values)
+                evaluate(f"set_property {key} [list {words}] [get_filesets {tcl_word(fileset)}]")
             evaluate(f"set_property top {tcl_word(top)} [get_filesets {tcl_word(fileset)}]")
-            if sources:
-                evaluate("set_property file_type SystemVerilog "
-                         f"[get_files -of_objects [get_filesets {tcl_word(fileset)}]]")
             vivado.update_compile_order("-fileset", fileset)
 
         arguments = ["-force", project.identifier, tcl_word(project.xpr.parent)]
