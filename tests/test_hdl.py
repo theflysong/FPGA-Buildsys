@@ -69,6 +69,32 @@ class HdlTests(unittest.TestCase):
         self.assertEqual(project.sources["src/top.sv"].symbols.imports, ("bus", "types"))
         self.assertEqual(source_closure(project, "top"), ["src/bus.sv", "src/types.sv", "src/top.sv"])
 
+    def test_hierarchical_and_member_references_are_not_package_dependencies(self):
+        self.write("src/types.sv", 'package types; parameter int value = 1; endpackage')
+        self.write("src/leaf.sv", '''module leaf;
+            logic [31:0] count;
+            if (1) begin : nested logic [31:0] count; end
+            endmodule''')
+        self.write("src/top.sv", '''module top;
+            leaf dut(), lanes[2]();
+            struct packed { logic [31:0] field; } record;
+            int value;
+            initial begin
+                record.field = types::value;
+                value = record.field;
+                value = dut.count;
+                value = dut.nested.count;
+                value = lanes[0].count;
+                value = $root.top.dut.count;
+                force dut.count = 1;
+                release dut.count;
+            end
+            endmodule''')
+        project = build_model(configure(self.root, "model"))
+        self.assertEqual(project.sources["src/top.sv"].symbols.imports, ("leaf", "types"))
+        self.assertEqual(source_closure(project, "top"),
+                         ["src/leaf.sv", "src/types.sv", "src/top.sv"])
+
     def test_nested_includes_macros_and_stale_metadata(self):
         self.write("include 中文/inner.svh", '`define LEAF leaf\n')
         self.write("include 中文/outer.vh", '`include "inner.svh"\n')

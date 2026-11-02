@@ -85,7 +85,8 @@ def parse_source(root: Path, source: Path, options: HdlOptions) -> ParsedSource:
             # The generic `interface port` form has no concrete dependency.
             if token.kind.name == "Identifier":
                 reference(token)
-        elif kind == "ScopedName":
+        elif kind == "ScopedName" and node.separator.kind.name == "DoubleColon":
+            # Dot-separated hierarchy / member access is not a package import.
             left = node.left
             if left.kind.name == "IdentifierName":
                 token = left.identifier
