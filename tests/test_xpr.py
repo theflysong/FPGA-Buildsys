@@ -21,6 +21,7 @@ from completion_ids import candidate_ids
 from models import SourceModel, SourceSymbols, XprProject
 from task.configure import configure as configure_project
 from task.model import build_model
+from task.vivado.xpr import model_snapshot, snapshot_path
 from toolchains import select_toolchain
 from util import ConfigError
 
@@ -166,7 +167,7 @@ class XprTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(ENTRY), "--project", str(self.root), *args],
                               env=self.env, cwd=self.root.parent, capture_output=True, text=True, timeout=20)
 
-    def fake_export(self, project=None):
+    def fake_export(self, project=None, arguments=("xpr",)):
         import tkinter
         namespace = {}
         with patch.dict(os.environ, XPR_CALLS=str(self.calls)):
@@ -193,8 +194,158 @@ class XprTests(unittest.TestCase):
                 patch("task.vivado.xpr.shutil.which", return_value="vivado"), \
                 model, \
                 redirect_stdout(output), redirect_stderr(errors):
-            result = main.main(["--project", str(self.root), "xpr"])
+            result = main.main(["--project", str(self.root), *arguments])
         return SimpleNamespace(returncode=result, stdout=output.getvalue(), stderr=errors.getvalue())
+
+    def fake_stage(self, command="xpr-synthesis", target_id="core"):
+        with patch("task.vivado.xpr_stage.run_stage", side_effect=lambda target, *args, **kwargs: target) as stage:
+            result = self.fake_export(arguments=(command, target_id))
+        return result, stage
+
+    @unittest.skipUnless(HAS_TCL, "Requires Tcl")
+    def test_export_saves_snapshot_independent_of_stage_and_mapping_order(self):
+        result = self.fake_export()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        project = configure(self.root, "xpr")
+        snapshot = snapshot_path(project)
+        record = json.loads(snapshot.read_text(encoding="utf-8"))
+        self.assertEqual(record["projects"][0]["top"], "top")
+        self.assertEqual(record["sources"]["src/top.v"]["dependencies"],
+                         [self.leaf.relative_to(self.root).as_posix()])
+        stage = configure(self.root, "xpr-bitstream", "core")
+        self.assertEqual(snapshot.read_text(encoding="utf-8"), model_snapshot(stage))
+        self.assertEqual(model_snapshot(stage), model_snapshot(replace(
+            stage, sources=dict(reversed(list(stage.sources.items()))))))
+
+    @unittest.skipUnless(HAS_TCL, "Requires Tcl")
+    def test_all_stages_reuse_matching_snapshot(self):
+        result = self.fake_export()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        project = configure(self.root, "xpr")
+        paths = (project.xpr, snapshot_path(project))
+        modified = [path.stat().st_mtime_ns for path in paths]
+        exported = self.calls.read_text()
+        for command in ("xpr-simulation", "xpr-synthesis", "xpr-implementation", "xpr-bitstream", "xpr-program",
+                        "simulate", "synthesis", "implementation", "bitstream", "program"):
+            with self.subTest(command=command):
+                result, stage = self.fake_stage(command, "first" if command in {"simulate", "xpr-simulation"} else "core")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                stage.assert_called_once()
+                self.assertEqual(self.calls.read_text(), exported)
+                self.assertEqual([path.stat().st_mtime_ns for path in paths], modified)
+
+    @unittest.skipUnless(HAS_TCL, "Requires Tcl")
+    def test_missing_or_invalid_snapshot_and_missing_xpr_trigger_export(self):
+        for condition in ("initial", "missing-xpr", "missing-snapshot", "invalid-json", "invalid-utf8", "old-version"):
+            with self.subTest(condition=condition):
+                if condition != "initial":
+                    project = configure(self.root, "xpr")
+                    snapshot = snapshot_path(project)
+                    if condition == "missing-xpr":
+                        project.xpr.unlink()
+                    elif condition == "missing-snapshot":
+                        snapshot.unlink()
+                    elif condition == "old-version":
+                        snapshot.write_text(model_snapshot(project).replace('"version": 1', '"version": 0'), encoding="utf-8")
+                    else:
+                        snapshot.write_bytes(b"{broken" if condition == "invalid-json" else b"\xff")
+                self.calls.unlink(missing_ok=True)
+                result, stage = self.fake_stage()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                stage.assert_called_once()
+                calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+                self.assertEqual(sum(row[0] == "create_project" for row in calls), 1)
+                project = configure(self.root, "xpr")
+                self.assertEqual(snapshot_path(project).read_text(encoding="utf-8"), model_snapshot(project))
+
+    @unittest.skipUnless(HAS_TCL, "Requires Tcl")
+    def test_source_graph_and_configuration_changes_regenerate_shared_project(self):
+        for change in ("dependency", "removed-dependency", "source-path", "include", "top", "part", "constraints",
+                       "timescale", "defines", "include-dirs", "target-added", "target-removed"):
+            with self.subTest(change=change):
+                self.config.write_text(self.original)
+                top = self.root / "src/top.v"
+                top.write_text("module top; leaf dut(); endmodule\n")
+                result = self.fake_export()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                text = self.original
+                extra = None
+                if change == "dependency":
+                    top.write_text("module top; leaf dut(); helper extra(); endmodule\n")
+                elif change == "removed-dependency":
+                    top.write_text("module top; endmodule\n")
+                elif change == "source-path":
+                    extra = self.root / "src/moved.v"
+                    top.rename(extra)
+                elif change == "include":
+                    extra = self.root / "src/header.vh"
+                    extra.write_text("// header\n")
+                    top.write_text('`include "header.vh"\nmodule top; leaf dut(); endmodule\n')
+                elif change == "top":
+                    text = text.replace('top-symbol = "top"', 'top-symbol = "leaf"')
+                elif change == "part":
+                    text = text.replace("xc7a35tcsg324-1", "xc7a100tcsg324-1")
+                elif change == "constraints":
+                    extra = self.root / "constraints/new.xdc"
+                    extra.write_text("# new constraints\n")
+                    text = text.replace("board.xdc", "new.xdc")
+                elif change == "timescale":
+                    text = text.replace("10ns/1ps", "100ns/1ps")
+                elif change == "defines":
+                    text += '[hdl]\ndefines = { FEATURE = "1" }\n'
+                elif change == "include-dirs":
+                    text += '[hdl]\ninclude-dirs = ["src"]\n'
+                elif change == "target-added":
+                    text += '[[project]]\nid="extra"\nfpga="board"\ntop-symbol="leaf"\nconstraints="board.xdc"\n'
+                elif change == "target-removed":
+                    text = text[:text.index('[[simulation]]\nid = "second"')]
+                self.config.write_text(text)
+                self.calls.unlink()
+                result, stage = self.fake_stage("xpr-bitstream")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                stage.assert_called_once()
+                self.assertIn("Regenerating XPR project", result.stdout)
+                project = configure(self.root, "xpr")
+                self.assertEqual(snapshot_path(project).read_text(encoding="utf-8"), model_snapshot(project))
+                if change == "dependency":
+                    filesets = json.loads(project.xpr.read_text())
+                    self.assertIn(str(self.root / "src/helper.sv"), filesets["src_core"])
+                if extra is not None:
+                    extra.unlink()
+
+    @unittest.skipUnless(HAS_TCL, "Requires Tcl")
+    def test_unchanged_model_after_source_edit_reuses_xpr(self):
+        result = self.fake_export()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        exported = self.calls.read_text()
+        top = self.root / "src/top.v"
+        top.write_text("module top; leaf dut(); wire changed = 1'b1; endmodule\n")
+        (self.root / "constraints/board.xdc").write_text("# changed constraint contents\n")
+        result, stage = self.fake_stage()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        stage.assert_called_once()
+        self.assertEqual(self.calls.read_text(), exported)
+
+    @unittest.skipUnless(HAS_TCL, "Requires Tcl")
+    def test_failed_regeneration_invalidates_snapshot_and_prevents_stage(self):
+        result = self.fake_export()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        project = configure(self.root, "xpr")
+        with patch.dict(os.environ, XPR_FAIL="create_run"):
+            result, stage = self.fake_stage()
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            stage.assert_called_once()
+            self.config.write_text(self.original.replace("10ns/1ps", "100ns/1ps"))
+            result, stage = self.fake_stage()
+        self.assertEqual(result.returncode, 1)
+        stage.assert_not_called()
+        self.assertFalse(snapshot_path(project).exists())
+        self.assertNotIn("The path of xpr:", result.stdout)
+        self.config.write_text(self.original)
+        result, stage = self.fake_stage()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        stage.assert_called_once()
+        self.assertTrue(snapshot_path(project).is_file())
 
     def test_export_configures_all_targets_without_local_fpga_settings(self):
         project = configure(self.root, "xpr")

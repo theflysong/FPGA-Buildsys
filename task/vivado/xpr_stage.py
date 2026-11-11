@@ -1,4 +1,4 @@
-"""Execute one configured target inside the existing shared Vivado XPR."""
+"""Keep the shared Vivado XPR current and execute one configured target."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 from models import Project, XprStageTarget
-from .xpr import tcl_word
+from .xpr import ensure_current, tcl_word
 from util import ConfigError, write_template
 
 
@@ -95,6 +95,7 @@ def execute(project: Project, target_id: str | None,
     target = next((item for item in project.xpr_stages if item.identifier == target_id), None)
     if target is None:
         raise ConfigError(f"unknown target {target_id!r}")
+    ensure_current(project)
     options = dict(zip(task_args[::2], task_args[1::2]))
     target = run_stage(target, project.command.removeprefix("xpr-"),
                        hw_server=options.get("--hw-server", "localhost:3121"),

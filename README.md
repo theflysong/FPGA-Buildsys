@@ -55,7 +55,7 @@ Shell 和 Tcl 输出使用 LF，批处理输出使用 CRLF，shell 入口和任�
 | `program` | `yosys-program` | `xpr-program` |
 
 `simulate` 接收 `[[simulation]]` 的 id；FPGA 阶段接收 `[[project]]` 的 id。Vivado 的 `xpr` 命令不接收目标参数。
-选择 `vivado` 后，`simulate` 直接打开已有 XPR 执行仿真，无需 Bash 或 Icarus；先运行 `xpr` 导出工程，配置或源码路径变化后重新导出。
+选择 `vivado` 后，`simulate` 通过 XPR 执行仿真，无需 Bash 或 Icarus；执行前比较当前 model 与导出快照，工程缺失或快照不匹配时自动导出。
 未选择工具链时，`simulate` 保留 Icarus Verilog 仿真行为；`build` 始终使用 Icarus 编译。
 `program` 的参数和帮助也按工具链切换：Yosys 必须指定 `--protocol`，可用 `--busdev-num` 或 `--ftdi-serial`；
 Vivado 使用 `--hw-server` 和 `--device`，默认 Hardware Server 为 `localhost:3121`。
@@ -190,9 +190,9 @@ configure -> model -> auxiliary -> script ---|---> build -> simulate
                  |---> synthesis -> implementation -> bitstream -> program
 ```
 
-指定中间环节的任意一个(除program)都会触发前置环节的执行. 例如, `build` 会先执行 `configure`、`model`、`auxiliary` 和 `script`, 再开始构建. `model` 可单独生成符号表和文件依赖图; `auxiliary` 继续生成编译器辅助文件, `script` 继续生成任务脚本. `xpr` 执行 `configure → model → xpr`, 清理、烧录和补全跳过 model. `xpr-*` 执行 `configure → Vivado Tcl`, 在 Tcl 中处理所需 run 依赖, 不触发 model 或工程导出.
+指定中间环节的任意一个(除program)都会触发前置环节的执行. 例如, `build` 会先执行 `configure`、`model`、`auxiliary` 和 `script`, 再开始构建. `model` 可单独生成符号表和文件依赖图; `auxiliary` 继续生成编译器辅助文件, `script` 继续生成任务脚本. `xpr` 执行 `configure → model → xpr`，成功后保存 model 快照。`xpr-*` 执行 `configure → model → 快照检查 → Vivado Tcl`，工程缺失或快照不匹配时先重新导出整个共享工程，再在 Tcl 中处理所需 run 依赖。清理、Yosys 烧录和补全跳过 model。
 
-指定目标时, 配置校验和文件生成按目标及命令阶段进行. 例如 `simulate tb_example` 不要求其他 project 的构建字段或 FPGA 本地设置正确; `yosys-synthesis coreprog` 不要求实现、约束或比特流配置完整. 通用阶段采用路由后命令的流程和配置要求，各命令要求如下:
+指定目标时，Icarus/Yosys 配置校验和文件生成按目标及命令阶段进行。例如 Icarus `simulate tb_example` 不要求其他 project 的构建字段或 FPGA 本地设置正确; `yosys-synthesis coreprog` 不要求实现、约束或比特流配置完整。Vivado 阶段校验整个共享工程。通用阶段采用路由后命令的流程和配置要求，各命令要求如下:
 
 | 命令 | 需要的配置 |
 | --- | --- |
@@ -203,17 +203,17 @@ configure -> model -> auxiliary -> script ---|---> build -> simulate
 | `yosys-bitstream` | 实现所需配置 |
 | `yosys-program` | 已有 bitstream 的路径、FPGA 引用、可选工具路径、显式 protocol; 无需源码、约束、数据库或 PYTHONPATH |
 | `xpr` | 全部 project 和 simulation、各自源码依赖、约束与 FPGA part；纯仿真无需 FPGA |
-| Vivado `simulate` / `xpr-simulation` / `xpr-synthesis` / `xpr-implementation` / `xpr-bitstream` / `xpr-program` | 公共配置、project/simulation id、自动定位的共享 `.xpr`; 阶段执行无需重新扫描源码或读取 Yosys 本地设置；`xpr-program` 还需要有效 bitstream 和可用 Hardware Server |
+| Vivado `simulate` / `xpr-simulation` / `xpr-synthesis` / `xpr-implementation` / `xpr-bitstream` / `xpr-program` | 与 `xpr` 相同的全量目标配置和源码依赖，加所选 project/simulation id；自动检查并更新共享工程，不读取 Yosys 本地设置；`xpr-program` 还需要有效 bitstream 和可用 Hardware Server |
 | `clean` / `cleandist` | 公共配置和目标 id；无需源码、约束或 FPGA 本地设置；按目标清理现存共享 XPR 需要 Vivado |
 | `auxiliary` / `script` | 已选择工具链、全部源码依赖；Yosys 校验全量仿真/FPGA 配置和本地设置格式，Vivado 校验通用仿真配置 |
 
-所有项目命令仍要求公共配置的 TOML 语法、项目基本信息及 simulation/project 任务 id 合法且唯一. `xpr` 导出会统一校验全部 project 和 simulation；model 阶段使用 pyslang 预处理并解析全部源码以建立符号索引，因此全部源码必须语法正确且导出符号唯一。单目标构建只解析其依赖闭包中的缺失引用与环，无关文件的缺失引用和依赖环不阻塞当前目标。 `model` / `auxiliary` / `script` 会检查全部源码依赖, 可用于检查整个项目. 公开配置及源码验证通过后才初始化 FPGA 本地设置; 单独运行 `model` 不读取或创建这些设置.
+所有项目命令仍要求公共配置的 TOML 语法、项目基本信息及 simulation/project 任务 id 合法且唯一. `xpr` 和 `xpr-*` 会统一校验全部 project 和 simulation；model 阶段使用 pyslang 预处理并解析全部源码以建立符号索引，因此全部源码必须语法正确且导出符号唯一。Icarus/Yosys 单目标构建只解析其依赖闭包中的缺失引用与环，无关文件的缺失引用和依赖环不阻塞当前目标。 `model` / `auxiliary` / `script` 会检查全部源码依赖, 可用于检查整个项目. 公开配置及源码验证通过后才初始化 FPGA 本地设置; 单独运行 `model` 不读取或创建这些设置.
 
 每个源文件生成两份 JSON: `build/symbol/<hash>.json` 保存 `path`、`import`、`export`, `build/model/<hash>.json` 保存 `path`、`dependencies`、`closure`、`includes`. `includes` 是当前编译单元直接和传递包含的头文件列表，不属于独立编译单元。 `path` 及所有依赖路径均相对于 `configuration.toml` 所在目录, 使用 `/` 分隔; `<hash>` 是该源文件相对路径 UTF-8 字节的 SHA-256 完整十六进制值. `dependencies` 为去重的直接依赖, `closure` 为依赖优先排列的全部前置文件, 两者都不包含自身. 同文件导出的符号之间引用不会产生文件依赖.
 
-`model` / `auxiliary` / `script` 更新全部模型并移除失效的哈希 JSON; 单目标构建仅更新所选目标可达文件的模型，xpr 更新全部目标可达文件的模型. 内容未变的 JSON 保留修改时间. `auxiliary` 仅生成 `.f`、`.ys`, 不再生成旧的项目级 `.map` / `.dep`; 已有旧文件可由全项目 `cleandist` 清除.
+`model` / `auxiliary` / `script` 更新全部模型并移除失效的哈希 JSON; Icarus/Yosys 单目标构建仅更新所选目标可达文件的模型，`xpr` 和 `xpr-*` 更新全部目标可达文件的模型。内容未变的 JSON 保留修改时间. `auxiliary` 仅生成 `.f`、`.ys`, 不再生成旧的项目级 `.map` / `.dep`; 已有旧文件可由全项目 `cleandist` 清除.
 
-单目标命令只刷新当前阶段及其前置阶段的文件, 保留其他目标的模型、辅助文件和脚本. `jobs.sh` 仍列出全部任务 id, 但尚未生成脚本的任务会提示先运行对应的 buildsys 目标命令或全量 `script`. 项目级及各目标的清理脚本由全量 `script` 生成; CLI 和生成的清理入口调用同一个 Python 清理实现，不需要预先生成任务脚本.
+Icarus/Yosys 单目标命令只刷新当前阶段及其前置阶段的文件, 保留其他目标的模型、辅助文件和脚本. `jobs.sh` 仍列出全部任务 id, 但尚未生成脚本的任务会提示先运行对应的 buildsys 目标命令或全量 `script`. 项目级及各目标的清理脚本由全量 `script` 生成; CLI 和生成的清理入口调用同一个 Python 清理实现，不需要预先生成任务脚本.
 
 清理路径由 buildsys 推导，所有递归删除都校验路径位于受管理的构建目录。 `clean` 和单目标 `cleandist` 保留共享模型; 全项目 `cleandist` 删除 `build/model/` 和 `build/symbol/`. FPGA 本地设置始终保留.
 
@@ -253,7 +253,7 @@ defines = { FEATURE_ENABLED = "1", EMPTY_MACRO = "" }
 
 解析采用 SystemVerilog 模式处理 `.v` 与 `.sv`，与现有工具链选项一致。静态分析保守收集 generate 各分支的依赖，不执行完整 elaboration，不提供目标级宏覆盖或外部 IP 自动发现；工具隐式宏导致的依赖变体需要用户通过统一配置和源码管理。解析器支持的语法不等于编译器支持的语法：Icarus 与 Yosys 的 SystemVerilog 子集有限，Vivado 也以安装版本为准；本次不引入新的综合前端。
 
-预处理或语法错误会给出源码路径、行列和原因。仅在执行 model 阶段加载 pyslang；安装、补全、清理和已有 XPR 阶段执行无需加载解析器。
+预处理或语法错误会给出源码路径、行列和原因。仅在执行 model 阶段加载 pyslang；安装、补全、清理和 Yosys 烧录无需加载解析器。Vivado 阶段需要解析器以检查工程快照。
 
 Windows 下固定版本 pyslang 8.0.0 支持中文源码路径和 include 搜索目录，但 include 指令中的文件名需使用 ASCII 字符；该版本不能正确查找包含中文字符的 include 文件名。
 
@@ -352,7 +352,9 @@ PYTHONPATH = ["~/opt/fpga/ego1/src/prjxray"]
 ./buildsys xpr-program driver7seg --hw-server localhost:3121 --device "xc7*"
 ```
 
-这些阶段命令只打开已有 XPR；配置变化后重新执行 `xpr`。Vivado 的 `.runs`、`.sim`、日志和 bitstream 保留在该工程目录，buildsys 每次成功执行后报告实际绝对路径。
+导出成功后，buildsys 在 `build/vivado/<根级id>/.buildsys/model.json` 保存生成工程所用的 model 快照。所有 `xpr-*` 阶段及对应通用命令都会先重新建模并比较快照；工程或快照缺失、快照损坏或 model 不一致时，自动重新生成整个 XPR，再执行所选阶段。快照相符时复用工程，保留 XPR 和快照的修改时间。
+
+快照包含全部设计和仿真的源码依赖、头文件列表、顶层、FPGA part、约束路径、timescale、include 搜索目录及宏定义。普通源码或约束内容修改且 model 未变时，由 Vivado 的 run 刷新机制处理。导出开始前使旧快照失效，仅在成功后原子替换快照；导出失败时停止当前阶段，下次调用会重试导出。Vivado 的 `.runs`、`.sim`、日志和 bitstream 位于工程目录，buildsys 每次成功执行后报告实际绝对路径。
 
 ```bat
 buildsys.bat xpr-simulation <simulation-id>
@@ -383,7 +385,7 @@ bitstream 还会检查 `PROGRAM.FILE` 或 run 目录内的 `.bit` 文件, 文件
 `.runs`、`.sim`、日志和 bitstream 保留在 XPR 工程目录,
 不会写入配置中原有的 synthesis/implementation/bitstream 输出路径。
 
-阶段命令始终打开已有工程, 配置变更后需显式执行 `xpr` 重新导出。
+也可以显式执行 `xpr` 强制重新导出工程并更新快照。
 阶段 Tcl 脚本、日志和 journal 保存在工程目录的 `.buildsys/` 下, 例如
 `.buildsys/synthesis-driver7seg.log`。Tcl 错误、Vivado 错误日志、run 失败或进程异常均返回非零状态,
 保留中间产物供检查; 命令默认等待执行完成, 不启动 GUI。

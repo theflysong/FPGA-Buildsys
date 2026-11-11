@@ -3,12 +3,52 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
+import json
 import os
 from pathlib import Path
 import shutil
 
 from models import Project
 from util import ConfigError, source_closure
+
+
+def snapshot_path(project: Project) -> Path:
+    assert project.xpr is not None
+    return project.xpr.parent / ".buildsys" / "model.json"
+
+
+def model_snapshot(project: Project) -> str:
+    """Serialize the model and settings used by export, independent of the command."""
+    record = {
+        "version": 1,
+        "root": project.root.as_posix(),
+        "id": project.identifier,
+        "projects": [{
+            "id": design.identifier, "top": design.top, "part": design.fpga.part,
+            "constraints": design.constraints.as_posix(),
+        } for design in project.xprs],
+        "simulations": [asdict(simulation) for simulation in project.xpr_simulations],
+        "hdl": {
+            "include_dirs": [path.as_posix() for path in project.hdl.include_dirs],
+            "defines": project.hdl.defines,
+        },
+        "sources": {path: asdict(source) for path, source in project.sources.items()},
+    }
+    return json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+
+
+def ensure_current(project: Project) -> None:
+    """Regenerate missing or outdated projects before executing a Vivado stage."""
+    assert project.xpr is not None
+    if project.xpr.is_file():
+        try:
+            if snapshot_path(project).read_text(encoding="utf-8") == model_snapshot(project):
+                return
+        except (FileNotFoundError, UnicodeError):
+            pass
+    print(f"Regenerating XPR project: {project.xpr}", flush=True)
+    execute(project, None)
 
 
 def tcl_word(value: str | Path) -> str:
@@ -48,6 +88,9 @@ def _export(project: Project, target_id: str | None,
     assert project.xpr is not None
     project.xpr.parent.mkdir(parents=True, exist_ok=True)
     (project.xpr.parent / ".buildsys").mkdir(exist_ok=True)
+    # A failed export may leave a partially rewritten XPR. Never reuse its old snapshot.
+    snapshot = snapshot_path(project)
+    snapshot.unlink(missing_ok=True)
     with Vivado("-log", f".buildsys/xpr-{project.identifier}.log",
                 "-journal", f".buildsys/xpr-{project.identifier}.jou",
                 nolog=False, nojournal=False, cwd=project.xpr.parent,
@@ -119,6 +162,9 @@ def _export(project: Project, target_id: str | None,
         vivado.close_project()
     if not project.xpr.is_file():
         raise ConfigError(f"Vivado did not create the expected project: {project.xpr}")
+    temporary = snapshot.with_suffix(".json.tmp")
+    temporary.write_text(model_snapshot(project), encoding="utf-8")
+    temporary.replace(snapshot)
 
 
 def execute(project: Project, target_id: str | None,

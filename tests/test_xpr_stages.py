@@ -14,7 +14,9 @@ from completion_ids import xpr_simulation_ids
 from models import Project, XprStageTarget
 from planner import Planner
 from task.configure import configure
+from task.model import build_model
 from task.script import generate_script
+from task.vivado.xpr import model_snapshot, snapshot_path
 from task.vivado.xpr_stage import execute
 from toolchains import select_toolchain
 from util import ConfigError
@@ -36,14 +38,31 @@ class XprStageTests(unittest.TestCase):
         self.config = self.root / "configuration.toml"
         self.original = '\n'.join((
             'id = "example"', 'name = "Existing XPR"', '[directories]',
-            '[[project]]', 'id = "core"', '[[project]]', 'id = "other_core"',
-            '[[simulation]]', 'id = "first"', '[[simulation]]', 'id = "second"',
-            '[[simulation]]', 'id = "other"', '',
+            'sources = ["src"]', 'simulation = ["sim"]', 'constraints = ["constraints"]',
+            '[[fpga]]', 'id = "board"', 'part = "xc7a35tcsg324-1"',
+            '[[project]]', 'id = "core"', 'fpga = "board"',
+            'top-symbol = "top"', 'constraints = "board.xdc"',
+            '[[project]]', 'id = "other_core"', 'fpga = "board"',
+            'top-symbol = "top"', 'constraints = "board.xdc"',
+            '[[simulation]]', 'id = "first"', 'top-symbol = "tb_first"',
+            '[[simulation]]', 'id = "second"', 'top-symbol = "tb_second"',
+            '[[simulation]]', 'id = "other"', 'top-symbol = "tb_other"', '',
         ))
         self.config.write_text(self.original, encoding="utf-8")
+        for directory in ("src", "sim", "constraints"):
+            (self.root / directory).mkdir()
+        (self.root / "src/top.sv").write_text("module top; endmodule\n", encoding="utf-8")
+        for identifier in ("first", "second", "other"):
+            (self.root / f"sim/{identifier}.sv").write_text(
+                f"module tb_{identifier}; top dut(); endmodule\n", encoding="utf-8")
+        (self.root / "constraints/board.xdc").write_text("# XDC\n", encoding="utf-8")
         self.xpr = self.root / "build/vivado/example/example.xpr"
         self.xpr.parent.mkdir(parents=True)
         self.xpr.write_text("existing project - never replace", encoding="utf-8")
+        project = build_model(configure(self.root, "xpr"))
+        snapshot = snapshot_path(project)
+        snapshot.parent.mkdir()
+        snapshot.write_text(model_snapshot(project), encoding="utf-8")
         tools = tempfile.TemporaryDirectory(prefix="stage tools ")
         self.addCleanup(tools.cleanup)
         self.tools = Path(tools.name)
@@ -65,7 +84,8 @@ class XprStageTests(unittest.TestCase):
             capture_output=True, text=True, timeout=20,
         )
         self.assertEqual(self.xpr.read_text(), "existing project - never replace")
-        self.assertFalse((self.root / "build/model").exists())
+        if result.returncode == 0 and command not in {"clean", "cleandist"}:
+            self.assertTrue((self.root / "build/model").is_dir())
         self.assertFalse((self.root / ".buildsys/fpga").exists())
         return result
 
@@ -91,10 +111,12 @@ class XprStageTests(unittest.TestCase):
                 target, = project.xpr_stages
                 self.assertIsInstance(target, XprStageTarget)
                 self.assertEqual(target.xpr, self.xpr)
-                self.assertEqual(project.xprs, ())
-                self.assertEqual(project.source_directories, ())
-                self.assertEqual(Planner.TASKS["xpr-" + command], ("configure", "xpr stage execution"))
-        self.assertFalse((self.xpr.parent / ".buildsys").exists())
+                self.assertEqual([item.identifier for item in project.xprs], ["core", "other_core"])
+                self.assertEqual(project.source_directories, (self.root / "src",))
+                self.assertEqual(Planner.TASKS["xpr-" + command], ("configure", "model", "xpr stage execution"))
+        self.assertFalse((self.root / "build/model").exists())
+        self.assertEqual(list((self.xpr.parent / ".buildsys").iterdir()),
+                         [self.xpr.parent / ".buildsys/model.json"])
 
     def test_configuration_errors(self):
         for command, target in (("xpr-synthesis", "missing"), ("xpr-synthesis", "first"),
@@ -102,9 +124,9 @@ class XprStageTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, "unknown"):
                 configure(self.root, command, target)
         self.xpr.unlink()
-        with self.assertRaisesRegex(ConfigError, "buildsys xpr first"):
-            configure(self.root, "xpr-synthesis", "core")
-        self.assertFalse((self.xpr.parent / ".buildsys").exists())
+        project = configure(self.root, "xpr-synthesis", "core")
+        self.assertEqual(project.xpr, self.xpr)
+        self.assertFalse(self.xpr.exists())
 
     def test_shared_stages_use_existing_vivado_projects_and_backend_options(self):
         bitstream = self.bitstream()
@@ -139,7 +161,7 @@ class XprStageTests(unittest.TestCase):
         select_toolchain(self.root, "yosys")
         generate_script(Project(self.root, "example", (), (), toolchain="yosys"))
         select_toolchain(self.root, "vivado")
-        self.calls_path.unlink()
+        self.calls_path.unlink(missing_ok=True)
         result = subprocess.run([str(bash), str(self.root / "jobs.sh"), "simulate", "second"],
                                 cwd=self.root, env=self.env, capture_output=True, text=True, timeout=20)
         self.succeeded(result)
@@ -315,7 +337,7 @@ class XprStageTests(unittest.TestCase):
 
     def test_stage_target_records_resolved_bitstream_after_success(self):
         bitstream = self.bitstream()
-        project = configure(self.root, "xpr-bitstream", "core")
+        project = build_model(configure(self.root, "xpr-bitstream", "core"))
         env = dict(self.env, XPR_FAKE_STATE=json.dumps({"runs": {
             "synth_core": COMPLETE_SYNTH, "impl_core": COMPLETE_BIT}}))
         with patch.dict(os.environ, env):
@@ -391,7 +413,7 @@ class XprStageTests(unittest.TestCase):
         self.assertFalse(self.calls("reset_run"))
 
     def test_tool_tcl_log_and_process_errors(self):
-        project = configure(self.root, "xpr-synthesis", "core")
+        project = build_model(configure(self.root, "xpr-synthesis", "core"))
         with patch("task.vivado.xpr_stage.shutil.which", return_value=None):
             with self.assertRaisesRegex(ConfigError, "Missing tool: vivado"):
                 execute(project, "core")

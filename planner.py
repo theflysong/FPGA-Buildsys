@@ -28,11 +28,11 @@ class Planner:
         "cleandist": ("configure", "cleanup execution"),
         "yosys-program": ("configure", "script generation", "script execution"),
         "xpr": ("configure", "model", "xpr generation"),
-        "xpr-simulation": ("configure", "xpr stage execution"),
-        "xpr-synthesis": ("configure", "xpr stage execution"),
-        "xpr-implementation": ("configure", "xpr stage execution"),
-        "xpr-bitstream": ("configure", "xpr stage execution"),
-        "xpr-program": ("configure", "xpr stage execution"),
+        "xpr-simulation": ("configure", "model", "xpr stage execution"),
+        "xpr-synthesis": ("configure", "model", "xpr stage execution"),
+        "xpr-implementation": ("configure", "model", "xpr stage execution"),
+        "xpr-bitstream": ("configure", "model", "xpr stage execution"),
+        "xpr-program": ("configure", "model", "xpr stage execution"),
     }
 
     def run(self, root: Path, command: str, target_id: str | None = None,

@@ -1,5 +1,6 @@
 """Resolve the workspace's one Vivado project and its configured targets."""
 
+from dataclasses import replace
 from pathlib import Path
 
 from layout import Layout
@@ -40,13 +41,12 @@ def configure_xpr(root: Path, data: dict, config_path: Path, identifier: str,
 def configure_xpr_stage(root: Path, data: dict, config_path: Path, identifier: str,
                         entries: dict[str, tuple[str, dict, str]], target_id: str | None,
                         command: str) -> Project:
-    """Existing XPR commands need ids, not sources, constraints, or local settings."""
+    """Resolve all XPR inputs so stages can detect changes to the shared project."""
     kind = "simulation" if command == "xpr-simulation" else "project"
     if target_id not in entries or entries[target_id][0] != kind:
         raise ConfigError(f"{config_path}: unknown {kind} {target_id!r}; "
                           f"{command} now takes a {kind}-id, not an xpr-id")
-    xpr = Layout(root).xpr(identifier)
-    if not xpr.is_file():
-        raise ConfigError(f"XPR project does not exist: {xpr}; run buildsys xpr first")
-    target = XprStageTarget(target_id, xpr, kind)
-    return Project(root, identifier, (), (), command=command, xpr=xpr, xpr_stages=(target,))
+    project = configure_xpr(root, data, config_path, identifier, entries, None)
+    assert project.xpr is not None
+    target = XprStageTarget(target_id, project.xpr, kind)
+    return replace(project, command=command, xpr_stages=(target,))
