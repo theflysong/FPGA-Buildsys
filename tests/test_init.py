@@ -44,7 +44,7 @@ class InitTests(unittest.TestCase):
         for name, (content, mode) in wrappers.items():
             self.assertEqual((self.root / name).read_bytes(), content)
             self.assertEqual((self.root / name).stat().st_mode, mode)
-        # Configuring the new project checks automatic source dependency resolution.
+        # Configuring the new project collects all generated HDL sources.
         selection = self.run_command(str(self.root / "buildsys"), "toolchain", "yosys")
         self.assertEqual(selection.returncode, 0, selection.stderr)
         configured = self.run_command(str(self.root / "buildsys"), "auxiliary")

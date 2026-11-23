@@ -47,7 +47,7 @@ def report_project(project: Project, target_id: str | None) -> None:
     command = project.command
     entries: list[tuple[str, Path]] = []
     if command == "model":
-        entries = [("symbol directory", project.symbol_dir), ("model directory", project.model_dir)]
+        entries = [("model directory", project.model_dir)]
     elif command == "auxiliary":
         entries = [("auxiliary directory", project.auxiliary_dir)]
     elif command == "script":

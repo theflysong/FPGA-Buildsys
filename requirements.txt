@@ -1,3 +1,2 @@
-# Python 3.11+; pyslang models HDL sources, pytcl-eda exports Vivado projects.
+# Python 3.11+; pytcl-eda exports Vivado projects.
 pytcl-eda==0.3.0
-pyslang==8.0.0

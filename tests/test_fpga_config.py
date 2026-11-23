@@ -179,7 +179,7 @@ class FpgaConfigurationTests(unittest.TestCase):
         other.write_text("invalid TOML [")
         self.config.write_text(original)
         (self.root / "constraints/board.xdc").unlink()
-        # The testbench's missing dependency is outside the program's closure.
+        # Source references are validated by the compiler, represented here by a fake tool.
         (self.root / "src/tb.v").write_text('module tb; absent dut(); endmodule')
         result = self.cli("synthesis", "main", env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -397,7 +397,7 @@ class FpgaConfigurationTests(unittest.TestCase):
             (original.replace('part = "xc7a35tcsg324-1"', 'part = "xc7a35tcsg324-1"\nxray-database = "old"'), "move xray-database"),
             (original.replace('part = "xc7a35tcsg324-1"', 'part = "xc7a35tcsg324-1"\ntoolchain-root = "old"'), "move toolchain-root"),
             (original.replace('part = "xc7a35tcsg324-1"', 'part = "xc7a35tcsg324-1"\nPYTHONPATH = ["old"]'), "move PYTHONPATH"),
-            (original.replace('top-symbol = "core"', 'top-symbol = "missing"'), "no exported top-symbol"),
+            (original.replace('top-symbol = "core"', 'top-symbol = "bad-name"'), "invalid top-symbol"),
             (original.replace('fpga = "ego1"', 'fpga = "missing"'), "unknown fpga id"),
         ):
             self.config.write_text(text)

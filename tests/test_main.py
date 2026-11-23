@@ -192,7 +192,7 @@ class BuildSystemTests(unittest.TestCase):
         original = config_path.read_text()
         for needle, replacement, error in (
             ('fpga = "ego1"', 'fpga = "missing"', "unknown fpga id"),
-            ('top-symbol = "core"', 'top-symbol = "missing"', "no exported top-symbol"),
+            ('top-symbol = "core"', 'top-symbol = "bad-name"', "invalid top-symbol"),
             ('constraints = "board.xdc"', 'constraints = "missing.xdc"', "constraints file does not exist"),
             ('top-symbol = "core"', 'top-symbol = "core"\nbitstream = "old.bit"', "obsolete"),
         ):
@@ -213,11 +213,9 @@ class BuildSystemTests(unittest.TestCase):
         self.assertFalse((self.root / "example.sh").exists())
         for task in ("build", "clean", "simulate"):
             self.assertTrue((self.root / f"build/jobs/demo/{task}.sh").is_file())
-        self.assertEqual(json.loads(model_file(self.root, "symbol", "src/tb.v").read_text()),
-                         {"path": "src/tb.v", "import": ["core"], "export": ["tb"]})
+        self.assertFalse((self.root / "build/symbol").exists())
         self.assertEqual(json.loads(model_file(self.root, "model", "src/tb.v").read_text()),
-                         {"path": "src/tb.v", "dependencies": ["src/core.v"], "closure": ["src/core.v"],
-                          "includes": []})
+                         {"path": "src/tb.v"})
         self.assertFalse((self.root / "build/auxiliary/example.map").exists())
         self.assertFalse((self.root / "build/auxiliary/example.dep").exists())
         filelist = (self.root / "build/auxiliary/demo.f").read_text()
@@ -263,8 +261,7 @@ class BuildSystemTests(unittest.TestCase):
         self.assertFalse((self.root / "build/auxiliary/prog_demo.ys").exists())
         self.assertFalse((self.root / "build/jobs/prog_demo").exists())
         self.assertTrue((self.root / "build/auxiliary/demo.f").exists())
-        for directory in ("model", "symbol"):
-            self.assertTrue(model_file(self.root, directory, "src/core.v").exists())
+        self.assertTrue(model_file(self.root, "model", "src/core.v").exists())
         self.assertTrue((self.root / "build/jobs/demo/build.sh").exists())
         self.assertTrue((self.root / "jobs.sh").exists())
         missing_job = self.dispatch("synthesis", "prog_demo")
@@ -410,9 +407,8 @@ class BuildSystemTests(unittest.TestCase):
 
     def test_invalid_configurations_have_locations(self) -> None:
         cases = (
-            ("duplicate export", self.root / "src/tb.v", 'module core; endmodule module tb; endmodule'),
-            ("unresolved import", self.root / "src/tb.v", 'module tb; missing dut(); endmodule'),
-            ("no exported top-symbol", self.root / "configuration.toml", (self.root / "configuration.toml").read_text().replace('top-symbol = "tb"', 'top-symbol = "missing"')),
+            ("invalid top-symbol", self.root / "configuration.toml", (self.root / "configuration.toml").read_text().replace('top-symbol = "tb"', 'top-symbol = "bad-name"')),
+            ("source directory does not exist", self.root / "configuration.toml", (self.root / "configuration.toml").read_text().replace('sources = ["src"]', 'sources = ["absent"]')),
         )
         for error, path, content in cases:
             with self.subTest(error=error):
@@ -424,41 +420,28 @@ class BuildSystemTests(unittest.TestCase):
                 self.assertIn(error, result.stderr)
                 self.assertIn(str(path), result.stderr)
 
-    @unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "Icarus Verilog unavailable")
-    def test_only_reachable_source_dependencies_block_a_target(self) -> None:
-        source = self.root / "src/tb.v"
-        original = source.read_text()
+    def test_unreferenced_sources_are_included_without_dependency_checks(self) -> None:
         (self.root / "src/unused.v").write_text("module unused; endmodule\n")
         (self.root / "src/other.v").write_text("module other; unused dut(); endmodule\n")
-        for dependency, error in (("missing", "unresolved import"), ("other", "cyclic source dependency")):
+        for dependency in ("missing", "other"):
             with self.subTest(dependency=dependency):
                 (self.root / "src/unused.v").write_text(f'module unused; {dependency} dut(); endmodule')
-                source.write_text(original)
-                selected = self.cli("simulate", "demo")
-                self.assertEqual(selected.returncode, 0, selected.stderr)
-                self.assertNotIn("unused.v", (self.root / "build/auxiliary/demo.f").read_text())
                 for command in ("auxiliary", "script"):
                     full = self.cli(command)
-                    self.assertNotEqual(full.returncode, 0)
-                    self.assertIn(error, full.stderr)
-                    self.assertIn(".v", full.stderr)
-                source.write_text(original.replace('endmodule', 'unused extra(); endmodule'))
-                reachable = self.cli("build", "demo")
-                self.assertNotEqual(reachable.returncode, 0)
-                self.assertIn(error, reachable.stderr)
-                self.assertIn(".v", reachable.stderr)
+                    self.assertEqual(full.returncode, 0, full.stderr)
+                    filelist = (self.root / "build/auxiliary/demo.f").read_text()
+                    self.assertIn("src/unused.v", filelist)
+                    self.assertIn("src/other.v", filelist)
 
-    def test_source_index_errors_still_block_selected_builds(self) -> None:
+    def test_source_syntax_and_symbols_are_left_to_compilers(self) -> None:
         (self.root / "src/unused.v").write_text("module unused; endmodule\n")
         source = self.root / "src/unused.v"
-        for content, error in (("module unused( ; endmodule", "unused.v"),
-                               ("module core; endmodule", "duplicate export")):
-            with self.subTest(error=error, content=content):
+        for content in ("module unused( ; endmodule", "module core; endmodule"):
+            with self.subTest(content=content):
                 source.write_text(content)
-                result = self.cli("build", "demo")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(error, result.stderr)
-                self.assertFalse((self.root / "build").exists())
+                result = self.cli("auxiliary")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("src/unused.v", (self.root / "build/auxiliary/demo.f").read_text())
 
     @unittest.skipUnless(shutil.which("iverilog") and shutil.which("vvp"), "Icarus Verilog unavailable")
     def test_selected_generation_preserves_other_models_and_tasks(self) -> None:
@@ -466,15 +449,14 @@ class BuildSystemTests(unittest.TestCase):
         self.assertEqual(self.cli("script").returncode, 0)
         files = [*self.root.glob("build/jobs/second/*.sh"),
                  *self.root.glob("build/jobs/_project/*.sh"),
-                 self.root / "build/auxiliary/second.f", model_file(self.root, "model", "src/second.v"),
-                 model_file(self.root, "symbol", "src/second.v")]
+                 self.root / "build/auxiliary/second.f", model_file(self.root, "model", "src/second.v")]
         before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in files}
         config = self.root / "configuration.toml"
         config.write_text(config.read_text().replace('top-symbol = "tb_second"', 'top-symbol = "absent"'))
         selected = self.cli("simulate", "demo")
         self.assertEqual(selected.returncode, 0, selected.stderr)
         self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns) for path in files}, before)
-        self.assertNotEqual(self.cli("script").returncode, 0)
+        self.assertEqual(self.cli("script").returncode, 0)
 
     def test_cleanup_does_not_require_sources_or_local_fpga_settings(self) -> None:
         self.add_program(mixed=True)

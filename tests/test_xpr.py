@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import main
 from completion_ids import candidate_ids
-from models import SourceModel, SourceSymbols, XprProject
+from models import XprProject
 from task.configure import configure as configure_project
 from task.model import build_model
 from task.vivado.xpr import model_snapshot, snapshot_path
@@ -203,19 +203,22 @@ class XprTests(unittest.TestCase):
         return result, stage
 
     @unittest.skipUnless(HAS_TCL, "Requires Tcl")
-    def test_export_saves_snapshot_independent_of_stage_and_mapping_order(self):
+    def test_export_saves_snapshot_independent_of_stage_and_source_order(self):
         result = self.fake_export()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         project = configure(self.root, "xpr")
         snapshot = snapshot_path(project)
         record = json.loads(snapshot.read_text(encoding="utf-8"))
         self.assertEqual(record["projects"][0]["top"], "top")
-        self.assertEqual(record["sources"]["src/top.v"]["dependencies"],
-                         [self.leaf.relative_to(self.root).as_posix()])
+        self.assertIn("src/top.v", record["sources"])
+        self.assertIn(self.leaf.relative_to(self.root).as_posix(), record["sources"])
+        self.assertEqual(record["simulation_sources"], ["sim/first.v", "sim/second.v"])
         stage = configure(self.root, "xpr-bitstream", "core")
         self.assertEqual(snapshot.read_text(encoding="utf-8"), model_snapshot(stage))
         self.assertEqual(model_snapshot(stage), model_snapshot(replace(
-            stage, sources=dict(reversed(list(stage.sources.items()))))))
+            stage, sources=tuple(reversed(stage.sources)))))
+        self.assertNotEqual(model_snapshot(stage), model_snapshot(replace(
+            stage, simulation_directories=(self.root / "src",))))
 
     @unittest.skipUnless(HAS_TCL, "Requires Tcl")
     def test_all_stages_reuse_matching_snapshot(self):
@@ -246,7 +249,7 @@ class XprTests(unittest.TestCase):
                     elif condition == "missing-snapshot":
                         snapshot.unlink()
                     elif condition == "old-version":
-                        snapshot.write_text(model_snapshot(project).replace('"version": 1', '"version": 0'), encoding="utf-8")
+                        snapshot.write_text(model_snapshot(project).replace('"version": 2', '"version": 1'), encoding="utf-8")
                     else:
                         snapshot.write_bytes(b"{broken" if condition == "invalid-json" else b"\xff")
                 self.calls.unlink(missing_ok=True)
@@ -259,28 +262,27 @@ class XprTests(unittest.TestCase):
                 self.assertEqual(snapshot_path(project).read_text(encoding="utf-8"), model_snapshot(project))
 
     @unittest.skipUnless(HAS_TCL, "Requires Tcl")
-    def test_source_graph_and_configuration_changes_regenerate_shared_project(self):
-        for change in ("dependency", "removed-dependency", "source-path", "include", "top", "part", "constraints",
+    def test_source_list_and_configuration_changes_regenerate_shared_project(self):
+        for change in ("source-added", "source-removed", "source-path", "top", "part", "constraints",
                        "timescale", "defines", "include-dirs", "target-added", "target-removed"):
             with self.subTest(change=change):
                 self.config.write_text(self.original)
                 top = self.root / "src/top.v"
                 top.write_text("module top; leaf dut(); endmodule\n")
+                helper = self.root / "src/helper.sv"
+                helper.write_text("module helper; endmodule\n")
                 result = self.fake_export()
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 text = self.original
                 extra = None
-                if change == "dependency":
-                    top.write_text("module top; leaf dut(); helper extra(); endmodule\n")
-                elif change == "removed-dependency":
-                    top.write_text("module top; endmodule\n")
+                if change == "source-added":
+                    extra = self.root / "src/unreferenced.sv"
+                    extra.write_text("module unreferenced; endmodule\n")
+                elif change == "source-removed":
+                    helper.unlink()
                 elif change == "source-path":
                     extra = self.root / "src/moved.v"
                     top.rename(extra)
-                elif change == "include":
-                    extra = self.root / "src/header.vh"
-                    extra.write_text("// header\n")
-                    top.write_text('`include "header.vh"\nmodule top; leaf dut(); endmodule\n')
                 elif change == "top":
                     text = text.replace('top-symbol = "top"', 'top-symbol = "leaf"')
                 elif change == "part":
@@ -307,9 +309,9 @@ class XprTests(unittest.TestCase):
                 self.assertIn("Regenerating XPR project", result.stdout)
                 project = configure(self.root, "xpr")
                 self.assertEqual(snapshot_path(project).read_text(encoding="utf-8"), model_snapshot(project))
-                if change == "dependency":
+                if change == "source-added":
                     filesets = json.loads(project.xpr.read_text())
-                    self.assertIn(str(self.root / "src/helper.sv"), filesets["src_core"])
+                    self.assertIn(str(extra), filesets["src_core"])
                 if extra is not None:
                     extra.unlink()
 
@@ -365,7 +367,7 @@ class XprTests(unittest.TestCase):
             (self.original.replace('id = "first"', 'id = "first"\nvcd="old"'), "obsolete"),
             (self.original.replace('id = "first"', 'id = "core"'), "duplicate task id"),
             (self.original.replace('id = "first"', 'id = "../bad"'), "invalid id"),
-            (self.original.replace('top-symbol = "tb_first"', 'top-symbol = "missing"'), "no exported top-symbol"),
+            (self.original.replace('top-symbol = "tb_first"', 'top-symbol = "bad-name"'), "invalid top-symbol"),
             (self.original.replace('fpga = "board"', 'fpga = "missing"'), "unknown fpga"),
             (self.original.replace('constraints = "board.xdc"', 'constraints = "missing.xdc"'), "does not exist"),
             (self.original.replace('timescale = "10ns/1ps"', 'timescale = "invalid"'), "invalid timescale"),
@@ -388,14 +390,12 @@ class XprTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "ambiguous constraints"):
             configure(self.root, "xpr")
 
-    def test_all_target_dependencies_and_directory_roles(self):
+    def test_source_references_are_not_validated_and_directory_roles_are_preserved(self):
         (self.root / "sim/second.v").write_text('module tb_second; missing dut(); endmodule')
-        with self.assertRaisesRegex(ConfigError, "unresolved import"):
-            configure(self.root, "xpr")
-        (self.root / "sim/second.v").write_text('module tb_second; endmodule')
         (self.root / "src/top.v").write_text('module top; tb_second dut(); endmodule')
-        with self.assertRaisesRegex(ConfigError, "directories.simulation"):
-            configure(self.root, "xpr")
+        project = configure(self.root, "xpr")
+        self.assertTrue(project.is_simulation_source("sim/second.v"))
+        self.assertFalse(project.is_simulation_source("src/top.v"))
 
     @unittest.skipUnless(HAS_TCL, "Requires Tcl")
     def test_headers_include_directories_and_macros_reach_filesets(self):
@@ -407,20 +407,7 @@ class XprTests(unittest.TestCase):
             'module top; `ifdef FEATURE\n`LEAF dut();\n`endif\nendmodule')
         self.config.write_text(self.original + '[hdl]\ninclude-dirs=["headers } 中文"]\n'
                                'defines={FEATURE="1",TEXT=\'"a b $[]"\'}\n', encoding="utf-8")
-        # Exercise the backend's model-to-Tcl boundary independently of parsing.
-        project = configure_project(self.root, "xpr")
-        leaf = self.leaf.relative_to(self.root).as_posix()
-        sources = {
-            leaf: SourceModel(SourceSymbols((), ("leaf",)), (), ()),
-            "src/helper.sv": SourceModel(SourceSymbols((), ("helper",)), (), ()),
-            "src/top.v": SourceModel(SourceSymbols(("leaf",), ("top",)), (leaf,), (leaf,),
-                                      ("headers } 中文/leaf.svh", "headers } 中文/outer.vh")),
-            "sim/first.v": SourceModel(SourceSymbols(("top", "helper"), ("tb_first",)),
-                                       ("src/top.v", "src/helper.sv"), (leaf, "src/helper.sv", "src/top.v")),
-            "sim/second.v": SourceModel(SourceSymbols(("leaf",), ("tb_second",)), (leaf,), (leaf,)),
-        }
-        exports = {name: path for path, item in sources.items() for name in item.symbols.exports}
-        result = self.fake_export(replace(project, sources=sources, exports=exports))
+        result = self.fake_export()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         import tkinter
@@ -429,11 +416,12 @@ class XprTests(unittest.TestCase):
         self.assertEqual(tcl.splitlist(include_dirs), (headers.as_posix(),))
         defines = next(row[2] for row in calls if row[:2] == ["set_property", "verilog_define"])
         self.assertEqual(tcl.splitlist(defines), ("FEATURE=1", 'TEXT="a b $[]"'))
-        for file_type, header in (("Verilog Header", "outer.vh"), ("SystemVerilog Header", "leaf.svh")):
-            self.assertIn(["set_property", "file_type", file_type, str(headers / header)], calls)
+        added_files = [row[-1] for row in calls if row[0] == "add_files"]
+        self.assertNotIn(str(headers / "outer.vh"), added_files)
+        self.assertNotIn(str(headers / "leaf.svh"), added_files)
 
     @unittest.skipUnless(HAS_TCL, "Requires Tcl")
-    def test_single_export_multiple_parts_and_independent_simulation_closures(self):
+    def test_single_export_multiple_parts_uses_complete_source_lists(self):
         self.config.write_text(self.original + '[[fpga]]\nid="large"\npart="xc7a100tcsg324-1"\n'
                                '[[project]]\nid="other"\nfpga="large"\ntop-symbol="leaf"\nconstraints="board.xdc"\n')
         for _ in range(2):
@@ -445,11 +433,12 @@ class XprTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         self.assertEqual(len([row for row in calls if row[0] == "create_project"]), 2)
         self.assertIn(["create_project", "-force", "example", str(path.parent), "-part", "xc7a35tcsg324-1"], calls)
-        self.assertEqual(filesets["src_core"], [str(self.leaf), str(self.root / "src/top.v")])
-        self.assertEqual(filesets["src_other"], [str(self.leaf)])
-        self.assertEqual(set(filesets["sim_first"]), {str(self.leaf), str(self.root / "src/top.v"),
-                                                    str(self.root / "src/helper.sv"), str(self.root / "sim/first.v")})
-        self.assertEqual(filesets["sim_second"], [str(self.leaf), str(self.root / "sim/second.v")])
+        design_files = [str(self.root / "src/helper.sv"), str(self.leaf), str(self.root / "src/top.v")]
+        simulation_files = [str(self.root / "sim/first.v"), str(self.root / "sim/second.v"), *design_files]
+        self.assertEqual(filesets["src_core"], design_files)
+        self.assertEqual(filesets["src_other"], design_files)
+        self.assertEqual(filesets["sim_first"], simulation_files)
+        self.assertEqual(filesets["sim_second"], simulation_files)
         for identifier, part in (("core", "xc7a35tcsg324-1"), ("other", "xc7a100tcsg324-1")):
             self.assertIn(["create_run", "synth_" + identifier, "-flow", "synthesis-flow", "-srcset", "src_" + identifier,
                            "-constrset", "constrs_" + identifier, "-part", part], calls)

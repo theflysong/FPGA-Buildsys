@@ -121,20 +121,6 @@ class CleanupTarget:
 
 
 @dataclass(frozen=True)
-class SourceSymbols:
-    imports: tuple[str, ...]
-    exports: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class SourceModel:
-    symbols: SourceSymbols
-    dependencies: tuple[str, ...]
-    closure: tuple[str, ...]
-    includes: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
 class HdlOptions:
     include_dirs: tuple[Path, ...] = ()
     defines: tuple[tuple[str, str], ...] = ()
@@ -157,8 +143,7 @@ class Project:
     source_directories: tuple[Path, ...] = ()
     simulation_directories: tuple[Path, ...] = ()
     fpgas: tuple[Fpga, ...] = ()
-    exports: dict[str, str] = field(default_factory=dict)
-    sources: dict[str, SourceModel] = field(default_factory=dict)
+    sources: tuple[str, ...] = ()
     toolchain: str | None = None
     hdl: HdlOptions = field(default_factory=HdlOptions)
 
@@ -168,10 +153,6 @@ class Project:
     @property
     def model_dir(self) -> Path:
         return self.root / "build" / "model"
-
-    @property
-    def symbol_dir(self) -> Path:
-        return self.root / "build" / "symbol"
 
     @property
     def auxiliary_dir(self) -> Path:

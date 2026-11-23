@@ -1,22 +1,23 @@
-"""Source models, dependency scoping, and persisted artifact behavior."""
+"""Source collection and persisted inventory without HDL dependency analysis."""
 
 from __future__ import annotations
 
 from dataclasses import replace
-import hashlib
 import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from models import Fpga, SynthesisProgram
 from task.auxiliary import generate_auxiliary
-from task.clean import cleanup, cleanup_script
+from task.clean import cleanup
 from task.configure import configure
-from task.model import build_model, generate_model
+from task.model import build_model, generate_model, source_filename
 from toolchains import select_toolchain
-from util import ConfigError, source_closure
+from util import ConfigError, source_files
 
 
 ENTRY = Path(__file__).resolve().parents[1] / "main.py"
@@ -28,192 +29,139 @@ class ModelTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         select_toolchain(self.root, "yosys")
-        (self.root / "src").mkdir()
-        (self.root / "sim").mkdir()
         self.config = self.root / "configuration.toml"
         self.original = (
-            'name = "Source graph"\nid = "graph"\n[directories]\nsources = ["src"]\nsimulation = ["sim"]\n[[simulation]]\nid = "test"\ntop-symbol = "tb"\ntimescale = "1ns/1ps"\n'
+            'name="Source inventory"\nid="inventory"\n[directories]\n'
+            'sources=["src"]\nsimulation=["sim"]\n'
+            '[[simulation]]\nid="test"\ntop-symbol="tb"\n'
         )
         self.config.write_text(self.original, encoding="utf-8")
-        self.source("src/leaf.v", ("leaf", "leaf_alias"))
-        self.source("src/left.v", ("left",), ("leaf", "leaf_alias"))
-        self.source("src/right.sv", ("right",), ("leaf",))
-        self.source("sim/test.v", ("tb",), ("left", "right"))
+        self.write("src/top.v", "module top; leaf dut(); endmodule")
+        self.write("src/nested/leaf.sv", "module leaf; endmodule")
+        self.write("sim/test.v", "module tb; top dut(); endmodule")
 
-    def source(self, path: str, exports: tuple[str, ...], imports: tuple[str, ...] = ()) -> None:
-        source = self.root / path
-        source.parent.mkdir(parents=True, exist_ok=True)
-        instances = " ".join(f"{name} dependency_{index}();" for index, name in enumerate(imports))
-        source.write_text("\n".join(
-            f"module {name}; {instances if index == 0 else ''} endmodule"
-            for index, name in enumerate(exports)), encoding="utf-8")
+    def write(self, name: str, content: str) -> Path:
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
 
     def cli(self, command: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([sys.executable, str(ENTRY), "--project", str(self.root), command],
                               capture_output=True, text=True, timeout=20)
 
-    def load(self, directory: str, path: str) -> dict:
-        name = hashlib.sha256(path.encode("utf-8")).hexdigest() + ".json"
-        return json.loads((self.root / "build" / directory / name).read_text(encoding="utf-8"))
+    def test_recursive_inventory_includes_unreferenced_files_and_filters_extensions(self):
+        self.write("src/unused.v", "module unused; endmodule")
+        self.write("src/nested/other.SV", "module other; endmodule")
+        for name in ("src/header.vh", "src/header.svh", "src/notes.txt", "outside.v"):
+            self.write(name, "not a compilation unit")
+        project = build_model(configure(self.root, "build", "test"))
+        self.assertEqual(project.sources, (
+            "sim/test.v", "src/nested/leaf.sv", "src/nested/other.SV", "src/top.v", "src/unused.v",
+        ))
+        generate_auxiliary(project)
+        self.assertEqual(project.filelist(project.simulations[0]).read_text().splitlines()[3:],
+                         list(project.sources))
 
-    def test_model_command_needs_only_common_configuration_and_sources(self) -> None:
-        self.config.write_text(self.original.replace(
-            'vvp = "build/vvp"\nvcd = "build/vcd"\n', ''
-        ).replace('top-symbol = "tb"\ntimescale = "1ns/1ps"\n', '')
-            + '[[project]]\nid = "unfinished"\n[[fpga]]\nid = "board"\n', encoding="utf-8")
-        local = self.root / ".buildsys/fpga/board.toml"
-        local.parent.mkdir(parents=True)
-        local.write_text("broken TOML [", encoding="utf-8")
+    def test_overlapping_directories_are_deduplicated(self):
+        self.config.write_text(self.original.replace('sources=["src"]',
+                                                     'sources=["src", "src/nested", "src/."]'))
+        project = build_model(configure(self.root, "model"))
+        self.assertEqual(project.sources, ("sim/test.v", "src/nested/leaf.sv", "src/top.v"))
+
+    def test_no_parser_or_source_content_reads_are_needed(self):
+        for text in ("module top( ; endmodule", "module tb; missing dut(); endmodule",
+                     "module leaf; top cyclic(); endmodule", '`include "absent.svh"'):
+            with self.subTest(text=text):
+                self.write("src/top.v", text)
+                project = configure(self.root, "build", "test")
+                with patch.dict(sys.modules, pyslang=None), \
+                        patch.object(Path, "read_text", side_effect=AssertionError("HDL was read")):
+                    project = build_model(project)
+                self.assertIn("src/top.v", project.sources)
+
+    def test_missing_top_symbol_is_passed_to_compiler(self):
+        self.config.write_text(self.original.replace('top-symbol="tb"', 'top-symbol="absent"'))
+        project = build_model(configure(self.root, "build", "test"))
+        generate_auxiliary(project)
+        self.assertIn("# top-symbol: absent", project.filelist(project.simulations[0]).read_text())
+
+    def test_synthesis_uses_all_design_files_and_simulation_uses_both_directories(self):
+        self.write("src/unreferenced.sv", "module unreferenced; endmodule")
+        project = build_model(configure(self.root, "build", "test"))
+        program = SynthesisProgram("design", Fpga("board", "part", None, (), ()), "top",
+                                   self.root / "build/design.json")
+        project = replace(project, toolchain="yosys", programs=(program,))
+        generate_auxiliary(project)
+        self.assertEqual(source_files(project),
+                         ["src/nested/leaf.sv", "src/top.v", "src/unreferenced.sv"])
+        yosys = project.yosys_script(program).read_text()
+        for path in source_files(project):
+            self.assertIn('"' + path + '"', yosys)
+        self.assertNotIn("sim/test.v", yosys)
+        self.assertIn("sim/test.v", project.filelist(project.simulations[0]).read_text())
+
+    def test_model_command_needs_only_common_configuration(self):
+        self.config.write_text(self.original.replace('top-symbol="tb"\n', '')
+                               + '[[project]]\nid="unfinished"\n[[fpga]]\nid="board"\n')
+        local = self.write(".buildsys/fpga/board.toml", "broken TOML [")
         before = local.read_bytes(), local.stat().st_mtime_ns
         result = self.cli("model")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines()[:2], ["configure", "model"])
         self.assertEqual((local.read_bytes(), local.stat().st_mtime_ns), before)
-        self.assertEqual(len(list((self.root / "build/model").glob("*.json"))), 4)
+        self.assertEqual(len(list((self.root / "build/model").glob("*.json"))), 3)
+        self.assertFalse((self.root / "build/symbol").exists())
         self.assertFalse((self.root / "build/auxiliary").exists())
-        self.assertFalse((self.root / "jobs.sh").exists())
 
-    def test_diamond_dependencies_symbols_and_topological_closure(self) -> None:
+    def test_inventory_contains_paths_only_and_preserves_unchanged_timestamps(self):
         project = build_model(configure(self.root, "model"))
         generate_model(project)
-        self.assertEqual(self.load("symbol", "src/leaf.v"),
-                         {"path": "src/leaf.v", "import": [], "export": ["leaf", "leaf_alias"]})
-        self.assertEqual(self.load("model", "src/left.v"), {
-            "path": "src/left.v", "dependencies": ["src/leaf.v"], "closure": ["src/leaf.v"], "includes": [],
-        })
-        self.assertEqual(self.load("model", "sim/test.v"), {
-            "path": "sim/test.v", "dependencies": ["src/left.v", "src/right.sv"],
-            "closure": ["src/leaf.v", "src/left.v", "src/right.sv"],
-            "includes": [],
-        })
-        self.assertEqual(source_closure(project, "tb"),
-                         ["src/leaf.v", "src/left.v", "src/right.sv", "sim/test.v"])
+        files = [project.model_dir / source_filename(path) for path in project.sources]
+        for source, path in zip(project.sources, files):
+            self.assertEqual(json.loads(path.read_text()), {"path": source})
+        before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in files}
+        generate_model(build_model(configure(self.root, "build", "test")))
+        self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns) for path in files}, before)
 
-    def test_path_hashes_distinguish_same_basename_and_survive_relocation(self) -> None:
-        self.source("src/nested/test.v", ("nested",))
-        self.source("src/中文/test.v", ("unicode_module",))
+    def test_inventory_removes_stale_records_and_preserves_other_files(self):
         project = build_model(configure(self.root, "model"))
         generate_model(project)
-        for source in ("src/nested/test.v", "src/中文/test.v", "sim/test.v"):
-            self.assertEqual(self.load("symbol", source)["path"], source)
-        other = self.root / "relocated"
-        generate_model(replace(project, root=other))
-        for directory in ("model", "symbol"):
-            original = {path.name: path.read_bytes() for path in (self.root / "build" / directory).iterdir()}
-            relocated = {path.name: path.read_bytes() for path in (other / "build" / directory).iterdir()}
-            self.assertEqual(original, relocated)
+        stale = self.write("build/model/" + source_filename("removed.v"), "{}")
+        note = self.write("build/model/notes.json", "keep")
+        (self.root / "src/top.v").unlink()
+        generate_model(build_model(configure(self.root, "build", "test")))
+        self.assertFalse(stale.exists())
+        self.assertFalse((project.model_dir / source_filename("src/top.v")).exists())
+        self.assertEqual(note.read_text(), "keep")
 
-    def test_overlapping_directories_and_legacy_sources_are_supported(self) -> None:
-        for directories in ('sources = ["src", "sim", "src/."]\nsimulation = ["sim", "src"]',
-                            'sources = ["src", "sim"]'):
-            with self.subTest(directories=directories):
-                self.config.write_text(self.original.replace(
-                    'sources = ["src"]\nsimulation = ["sim"]', directories), encoding="utf-8")
-                project = build_model(configure(self.root, "model"))
-                self.assertEqual(len(project.sources), 4)
-                self.assertEqual(project.exports["tb"], "sim/test.v")
-
-    def test_full_generation_removes_only_stale_hash_json(self) -> None:
-        self.assertEqual(self.cli("model").returncode, 0)
-        stale_name = hashlib.sha256(b"removed.v").hexdigest() + ".json"
-        for directory in ("model", "symbol"):
-            (self.root / "build" / directory / stale_name).write_text("{}")
-            (self.root / "build" / directory / "notes.json").write_text("keep")
-        result = self.cli("model")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        for directory in ("model", "symbol"):
-            self.assertFalse((self.root / "build" / directory / stale_name).exists())
-            self.assertEqual((self.root / "build" / directory / "notes.json").read_text(), "keep")
-
-    def test_selected_generation_preserves_unrelated_artifacts(self) -> None:
-        self.source("src/unused.v", ("unused",))
-        self.assertEqual(self.cli("model").returncode, 0)
-        filename = hashlib.sha256(b"src/unused.v").hexdigest() + ".json"
-        paths = [self.root / "build" / directory / filename for directory in ("model", "symbol")]
-        before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in paths}
-        self.source("src/unused.v", ("unused",), ("missing",))
-        project = build_model(configure(self.root, "build", "test"))
+    def test_paths_with_spaces_and_unicode_survive_relocation(self):
+        self.write("src/中文 path/test.v", "module extra; endmodule")
+        project = build_model(configure(self.root, "model"))
         generate_model(project)
-        generate_auxiliary(project)
-        self.assertNotIn("src/unused.v", project.sources)
-        self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns) for path in paths}, before)
-        self.assertEqual((self.root / "build/auxiliary/test.f").read_text().splitlines()[3:],
-                         ["src/leaf.v", "src/left.v", "src/right.sv", "sim/test.v"])
-        self.assertEqual(list((self.root / "build/auxiliary").iterdir()), [self.root / "build/auxiliary/test.f"])
-        with self.assertRaisesRegex(ConfigError, "unresolved import"):
+        other = replace(project, root=self.root / "relocated")
+        generate_model(other)
+        self.assertEqual({path.name: path.read_bytes() for path in project.model_dir.iterdir()},
+                         {path.name: path.read_bytes() for path in other.model_dir.iterdir()})
+
+    def test_configuration_stays_lazy_and_invalid_directories_report_locations(self):
+        self.assertEqual(configure(self.root, "model").sources, ())
+        self.config.write_text(self.original.replace('sources=["src"]', 'sources=["absent"]'))
+        with self.assertRaisesRegex(ConfigError, "configuration.toml: source directory does not exist"):
+            build_model(configure(self.root, "model"))
+        self.config.write_text(self.original)
+        for path in self.root.rglob("*.v"):
+            path.unlink()
+        (self.root / "src/nested/leaf.sv").unlink()
+        with self.assertRaisesRegex(ConfigError, "no Verilog source files"):
             build_model(configure(self.root, "model"))
 
-    def test_unrelated_cycles_only_block_full_commands(self) -> None:
-        self.source("src/cycle_a.v", ("cycle_a",), ("cycle_b",))
-        self.source("src/cycle_b.v", ("cycle_b",), ("cycle_a",))
-        build_model(configure(self.root, "build", "test"))
-        for command in ("model", "auxiliary", "script"):
-            with self.subTest(command=command), self.assertRaisesRegex(ConfigError, "cyclic source dependency"):
-                build_model(configure(self.root, command))
-
-    def test_reachable_missing_import_and_cycle_fail_without_outputs(self) -> None:
-        for imported, message in (("missing", "unresolved import"), ("tb", "cyclic source dependency")):
-            self.source("src/leaf.v", ("leaf", "leaf_alias"), (imported,))
-            with self.subTest(imported=imported):
-                result = self.cli("script")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(message, result.stderr)
-                self.assertIn(".v", result.stderr)
-                self.assertFalse((self.root / "build").exists())
-
-    def test_global_syntax_and_duplicate_errors_block_selected_targets(self) -> None:
-        self.source("src/unused.v", ("unused",))
-        source = self.root / "src/unused.v"
-        for text, message in (("module unused( ; endmodule", "unused.v"),
-                              ("module tb; endmodule", "duplicate export")):
-            with self.subTest(message=message):
-                source.write_text(text)
-                with self.assertRaisesRegex(ConfigError, message):
-                    build_model(configure(self.root, "build", "test"))
-
-    def test_self_imports_do_not_create_file_dependencies(self) -> None:
-        self.source("src/leaf.v", ("leaf", "leaf_alias"), ("leaf_alias",))
-        project = build_model(configure(self.root, "model"))
-        self.assertEqual(project.sources["src/leaf.v"].dependencies, ())
-        self.assertEqual(project.sources["src/leaf.v"].closure, ())
-
-    def test_configuration_does_not_scan_sources(self) -> None:
-        (self.root / "src/leaf.v").write_text("module leaf( ; endmodule")
-        project = configure(self.root, "build", "test")
-        self.assertEqual(project.sources, {})
-        with self.assertRaisesRegex(ConfigError, "leaf.v"):
-            build_model(project)
-
-    def test_cleanup_scripts_forward_to_python_and_preserve_models(self):
+    def test_cleanup_preserves_shared_inventory_until_full_cleandist(self):
         self.assertEqual(self.cli("script").returncode, 0)
         project = configure(self.root, "cleandist")
-        for target, dist in ((None, False), ("test", False), ("test", True)):
-            script = "\n".join(cleanup_script(project, target, dist=dist))
-            self.assertIn("main.py", script)
-            self.assertIn("cleandist" if dist else "clean", script)
-            self.assertNotIn("rm -rf", script)
-            cleanup(project, target, dist=dist)
-            self.assertTrue(project.model_dir.is_dir())
-            self.assertTrue(project.symbol_dir.is_dir())
+        cleanup(project, "test", dist=True)
+        self.assertTrue(project.model_dir.is_dir())
         cleanup(project, None, dist=True)
         self.assertFalse(project.model_dir.exists())
-        self.assertFalse(project.symbol_dir.exists())
-
-    def test_source_errors_precede_fpga_settings_initialization(self) -> None:
-        (self.root / "constraints").mkdir()
-        (self.root / "constraints/board.xdc").write_text("# constraints")
-        self.config.write_text(self.original.replace('[directories]\n',
-            '[directories]\nconstraints = ["constraints"]\n')
-            + '[[fpga]]\nid = "board"\npart = "xc7a35tcsg324-1"\n[[project]]\nid = "design"\nfpga = "board"\ntop-symbol = "left"\nconstraints = "board.xdc"\n')
-        self.source("src/left.v", ("left",), ("missing",))
-        failure = self.cli("script")
-        self.assertNotEqual(failure.returncode, 0)
-        self.assertIn("unresolved import", failure.stderr)
-        self.assertFalse((self.root / "build").exists())
-        self.source("src/left.v", ("left",), ("leaf",))
-        success = self.cli("script")
-        self.assertEqual(success.returncode, 0, success.stderr)
-        self.assertTrue((self.root / ".buildsys/fpga/board.toml").exists())
 
 
 if __name__ == "__main__":

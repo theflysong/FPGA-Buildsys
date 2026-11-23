@@ -10,7 +10,7 @@ from pathlib import Path
 import shutil
 
 from models import Project
-from util import ConfigError, source_closure
+from util import ConfigError, source_files
 
 
 def snapshot_path(project: Project) -> Path:
@@ -21,7 +21,7 @@ def snapshot_path(project: Project) -> Path:
 def model_snapshot(project: Project) -> str:
     """Serialize the model and settings used by export, independent of the command."""
     record = {
-        "version": 1,
+        "version": 2,
         "root": project.root.as_posix(),
         "id": project.identifier,
         "projects": [{
@@ -33,7 +33,9 @@ def model_snapshot(project: Project) -> str:
             "include_dirs": [path.as_posix() for path in project.hdl.include_dirs],
             "defines": project.hdl.defines,
         },
-        "sources": {path: asdict(source) for path, source in project.sources.items()},
+        "sources": sorted(project.sources),
+        "simulation_sources": [source for source in sorted(project.sources)
+                               if project.is_simulation_source(source)],
     }
     return json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
 
@@ -99,23 +101,11 @@ def _export(project: Project, target_id: str | None,
             return vivado.eval(tcl_word(command))
 
         def files(fileset: str, sources: list[str], top: str) -> None:
-            headers = sorted({header for source in sources for header in project.sources[source].includes})
             for source in sources:
                 vivado.add_files("-norecurse", "-fileset", fileset, tcl_word(project.root / source))
-            for header in headers:
-                if header not in sources:
-                    vivado.add_files("-norecurse", "-fileset", fileset, tcl_word(project.root / header))
-            # File names may contain glob metacharacters. Compare normalized
-            # paths exactly instead of passing user paths as get_files patterns.
-            header_paths = " ".join(f"[file normalize {tcl_word(project.root / header)}]"
-                                    for header in headers if header not in sources)
-            evaluate(f"set buildsys_headers [list {header_paths}]")
-            evaluate(f"foreach buildsys_file [get_files -of_objects [get_filesets {tcl_word(fileset)}]] {{\n"
-                     "if {[lsearch -exact $buildsys_headers [file normalize $buildsys_file]] >= 0} {\n"
-                     "if {[file extension $buildsys_file] eq {.svh}} {\n"
-                     "set_property file_type {SystemVerilog Header} $buildsys_file\n"
-                     "} else {\nset_property file_type {Verilog Header} $buildsys_file\n}\n"
-                     "} else {\nset_property file_type SystemVerilog $buildsys_file\n}\n}")
+            if sources:
+                evaluate(f"set_property file_type SystemVerilog "
+                         f"[get_files -of_objects [get_filesets {tcl_word(fileset)}]]")
             for key, values in (
                 ("include_dirs", [path.as_posix() for path in project.hdl.include_dirs]),
                 ("verilog_define", [f"{name}={value}" for name, value in project.hdl.defines]),
@@ -134,7 +124,7 @@ def _export(project: Project, target_id: str | None,
         evaluate("set buildsys_impl_flow [get_property FLOW [get_runs impl_1]]")
         for design in project.xprs:
             vivado.create_fileset("-srcset", design.source_set)
-            files(design.source_set, source_closure(project, design.top), design.top)
+            files(design.source_set, source_files(project), design.top)
             vivado.create_fileset("-constrset", design.constraint_set)
             vivado.add_files("-norecurse", "-fileset", design.constraint_set, tcl_word(design.constraints))
             evaluate(f"create_run {design.synthesis_run} -flow $buildsys_synth_flow "
@@ -153,7 +143,7 @@ def _export(project: Project, target_id: str | None,
         for simulation in project.xpr_simulations:
             vivado.create_fileset("-simset", simulation.fileset)
             evaluate(f"set_property SOURCE_SET {{}} [get_filesets {simulation.fileset}]")
-            files(simulation.fileset, source_closure(project, simulation.top), simulation.top)
+            files(simulation.fileset, source_files(project, simulation=True), simulation.top)
             evaluate(f"set_property xsim.elaborate.timescale {tcl_word(simulation.timescale)} "
                      f"[get_filesets {simulation.fileset}]")
         if project.xpr_simulations:

@@ -75,12 +75,10 @@ def output_name(value: str, location: str) -> str:
     return value
 
 
-def source_closure(project: Project, top: str) -> list[str]:
-    return source_order(project, project.exports[top])
-
-
-def source_order(project: Project, source: str) -> list[str]:
-    return [*project.sources[source].closure, source]
+def source_files(project: Project, *, simulation: bool = False) -> list[str]:
+    """Use every design source, adding simulation directories for simulation jobs."""
+    return sorted(source for source in project.sources
+                  if simulation or not project.is_simulation_source(source))
 
 
 def hdl_arguments(project: Project) -> list[str]:

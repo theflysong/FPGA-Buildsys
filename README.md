@@ -13,7 +13,7 @@
 ./buildsys init-venv
 ```
 
-`init-venv` 会在 `main.py` 所在的 buildsys 目录创建 `.venv/`, 并在其中安装 `requirements.txt` 的 `pytcl-eda` 和 `pyslang`. 源码建模也需要先运行此命令。之后 `buildsys`、`buildsys.sh` 和 `buildsys.bat` 检测到该环境时会使用其中的 Python；如果 `VIRTUAL_ENV` 已指向同一个环境，则跳过重复激活，否则先激活该环境。没有该目录时仍使用系统 Python。已有项目可重新运行 `install` 更新入口脚本。
+`init-venv` 会在 `main.py` 所在的 buildsys 目录创建 `.venv/`, 并在其中安装 `requirements.txt` 的 `pytcl-eda`，用于导出 Vivado 工程。`nopyslang` 分支收集源码列表时只使用 Python 标准库，无需安装 pyslang。之后 `buildsys`、`buildsys.sh` 和 `buildsys.bat` 检测到该环境时会使用其中的 Python；如果 `VIRTUAL_ENV` 已指向同一个环境，则跳过重复激活，否则先激活该环境。没有该目录时仍使用系统 Python。已有项目可重新运行 `install` 更新入口脚本。
 
 ## 脚本模板
 
@@ -190,30 +190,30 @@ configure -> model -> auxiliary -> script ---|---> build -> simulate
                  |---> synthesis -> implementation -> bitstream -> program
 ```
 
-指定中间环节的任意一个(除program)都会触发前置环节的执行. 例如, `build` 会先执行 `configure`、`model`、`auxiliary` 和 `script`, 再开始构建. `model` 可单独生成符号表和文件依赖图; `auxiliary` 继续生成编译器辅助文件, `script` 继续生成任务脚本. `xpr` 执行 `configure → model → xpr`，成功后保存 model 快照。`xpr-*` 执行 `configure → model → 快照检查 → Vivado Tcl`，工程缺失或快照不匹配时先重新导出整个共享工程，再在 Tcl 中处理所需 run 依赖。清理、Yosys 烧录和补全跳过 model。
+指定中间环节的任意一个(除program)都会触发前置环节的执行. 例如, `build` 会先执行 `configure`、`model`、`auxiliary` 和 `script`, 再开始构建. `model` 可单独收集全部源码路径，不生成符号表或文件依赖图；`auxiliary` 继续生成编译器辅助文件, `script` 继续生成任务脚本. `xpr` 执行 `configure → model → xpr`，成功后保存 model 快照。`xpr-*` 执行 `configure → model → 快照检查 → Vivado Tcl`，工程缺失或快照不匹配时先重新导出整个共享工程，再在 Tcl 中处理所需 run 依赖。清理、Yosys 烧录和补全跳过 model。
 
 指定目标时，Icarus/Yosys 配置校验和文件生成按目标及命令阶段进行。例如 Icarus `simulate tb_example` 不要求其他 project 的构建字段或 FPGA 本地设置正确; `yosys-synthesis coreprog` 不要求实现、约束或比特流配置完整。Vivado 阶段校验整个共享工程。通用阶段采用路由后命令的流程和配置要求，各命令要求如下:
 
 | 命令 | 需要的配置 |
 | --- | --- |
 | `model` | 公共项目配置、源码目录、HDL 配置及全部源码; 无需任务构建字段或 FPGA 本地设置 |
-| `build` / Icarus `simulate` | 当前 simulation 的顶层模块及其源码依赖；timescale 默认 `1ns/1ps` |
-| `yosys-synthesis` | 当前 project 的顶层和源码依赖、引用 FPGA 及本地构建设置 |
+| `build` / Icarus `simulate` | 当前 simulation 的顶层名称及全部设计、仿真源码目录；timescale 默认 `1ns/1ps` |
+| `yosys-synthesis` | 当前 project 的顶层名称、全部设计源码目录、引用 FPGA 及本地构建设置 |
 | `yosys-implementation` | 综合所需配置，加已有约束文件 |
 | `yosys-bitstream` | 实现所需配置 |
 | `yosys-program` | 已有 bitstream 的路径、FPGA 引用、可选工具路径、显式 protocol; 无需源码、约束、数据库或 PYTHONPATH |
-| `xpr` | 全部 project 和 simulation、各自源码依赖、约束与 FPGA part；纯仿真无需 FPGA |
-| Vivado `simulate` / `xpr-simulation` / `xpr-synthesis` / `xpr-implementation` / `xpr-bitstream` / `xpr-program` | 与 `xpr` 相同的全量目标配置和源码依赖，加所选 project/simulation id；自动检查并更新共享工程，不读取 Yosys 本地设置；`xpr-program` 还需要有效 bitstream 和可用 Hardware Server |
+| `xpr` | 全部 project 和 simulation、全部源码目录、约束与 FPGA part；纯仿真无需 FPGA |
+| Vivado `simulate` / `xpr-simulation` / `xpr-synthesis` / `xpr-implementation` / `xpr-bitstream` / `xpr-program` | 与 `xpr` 相同的全量目标配置和源码目录，加所选 project/simulation id；自动检查并更新共享工程，不读取 Yosys 本地设置；`xpr-program` 还需要有效 bitstream 和可用 Hardware Server |
 | `clean` / `cleandist` | 公共配置和目标 id；无需源码、约束或 FPGA 本地设置；按目标清理现存共享 XPR 需要 Vivado |
-| `auxiliary` / `script` | 已选择工具链、全部源码依赖；Yosys 校验全量仿真/FPGA 配置和本地设置格式，Vivado 校验通用仿真配置 |
+| `auxiliary` / `script` | 已选择工具链、全部源码目录；Yosys 校验全量仿真/FPGA 配置和本地设置格式，Vivado 校验通用仿真配置 |
 
-所有项目命令仍要求公共配置的 TOML 语法、项目基本信息及 simulation/project 任务 id 合法且唯一. `xpr` 和 `xpr-*` 会统一校验全部 project 和 simulation；model 阶段使用 pyslang 预处理并解析全部源码以建立符号索引，因此全部源码必须语法正确且导出符号唯一。Icarus/Yosys 单目标构建只解析其依赖闭包中的缺失引用与环，无关文件的缺失引用和依赖环不阻塞当前目标。 `model` / `auxiliary` / `script` 会检查全部源码依赖, 可用于检查整个项目. 公开配置及源码验证通过后才初始化 FPGA 本地设置; 单独运行 `model` 不读取或创建这些设置.
+所有项目命令仍要求公共配置的 TOML 语法、项目基本信息及 simulation/project 任务 id 合法且唯一。`xpr` 和 `xpr-*` 会统一校验全部 project 和 simulation。model 阶段只扫描文件路径，不读取 HDL 内容，不检查顶层定义、重复符号、缺失引用或依赖环；这些检查交给实际编译器。公开配置和源码目录验证通过后才初始化 FPGA 本地设置；单独运行 `model` 不读取或创建这些设置。
 
-每个源文件生成两份 JSON: `build/symbol/<hash>.json` 保存 `path`、`import`、`export`, `build/model/<hash>.json` 保存 `path`、`dependencies`、`closure`、`includes`. `includes` 是当前编译单元直接和传递包含的头文件列表，不属于独立编译单元。 `path` 及所有依赖路径均相对于 `configuration.toml` 所在目录, 使用 `/` 分隔; `<hash>` 是该源文件相对路径 UTF-8 字节的 SHA-256 完整十六进制值. `dependencies` 为去重的直接依赖, `closure` 为依赖优先排列的全部前置文件, 两者都不包含自身. 同文件导出的符号之间引用不会产生文件依赖.
+每个源文件生成一份 `build/model/<hash>.json`，只保存 `path`。路径相对于 `configuration.toml` 所在目录，使用 `/` 分隔；`<hash>` 是相对路径 UTF-8 字节的 SHA-256 完整十六进制值。不再生成 `build/symbol/` 或依赖信息。
 
-`model` / `auxiliary` / `script` 更新全部模型并移除失效的哈希 JSON; Icarus/Yosys 单目标构建仅更新所选目标可达文件的模型，`xpr` 和 `xpr-*` 更新全部目标可达文件的模型。内容未变的 JSON 保留修改时间. `auxiliary` 仅生成 `.f`、`.ys`, 不再生成旧的项目级 `.map` / `.dep`; 已有旧文件可由全项目 `cleandist` 清除.
+所有包含 model 阶段的命令更新完整源码清单并移除失效的哈希 JSON，内容未变的 JSON 保留修改时间。`auxiliary` 生成 `.f`、`.ys`。旧分支留下的 `build/symbol/` 和项目级 `.map` / `.dep` 可由全项目 `cleandist` 清除。
 
-Icarus/Yosys 单目标命令只刷新当前阶段及其前置阶段的文件, 保留其他目标的模型、辅助文件和脚本. `jobs.sh` 仍列出全部任务 id, 但尚未生成脚本的任务会提示先运行对应的 buildsys 目标命令或全量 `script`. 项目级及各目标的清理脚本由全量 `script` 生成; CLI 和生成的清理入口调用同一个 Python 清理实现，不需要预先生成任务脚本.
+Icarus/Yosys 单目标命令刷新共享源码清单及当前阶段的辅助文件、脚本，保留其他目标的辅助文件和脚本。`jobs.sh` 仍列出全部任务 id, 但尚未生成脚本的任务会提示先运行对应的 buildsys 目标命令或全量 `script`. 项目级及各目标的清理脚本由全量 `script` 生成; CLI 和生成的清理入口调用同一个 Python 清理实现，不需要预先生成任务脚本.
 
 清理路径由 buildsys 推导，所有递归删除都校验路径位于受管理的构建目录。 `clean` 和单目标 `cleandist` 保留共享模型; 全项目 `cleandist` 删除 `build/model/` 和 `build/symbol/`. FPGA 本地设置始终保留.
 
@@ -237,11 +237,11 @@ timescale = "1ns/1ps"
 
 `[directories]` 只配置输入目录 `sources`、可选的 `simulation` 和 `constraints`，它们都是字符串数组。VVP、VCD、Yosys 和 Vivado 产物路径由 buildsys 自动推导。model 扫描 `sources` 与 `simulation` 中的 `.v` / `.sv`, 重叠路径去重。Vivado 导出按目录区分设计文件和仿真文件。所有路径以项目根目录为基准。
 
-指定 `top-symbol` 后，构建系统从 `.v` / `.sv` 源码中自动提取 module、interface 和 package 定义，识别模块实例化、interface 端口、package import 和作用域引用，按依赖优先顺序生成编译文件列表。支持同文件多个模块、参数化实例、实例数组和 generate；内建门原语不产生外部文件依赖。同文件符号引用不产生文件依赖。
+本分支递归收集配置目录中的全部 `.v` / `.sv` 文件，按相对路径排序并去重，即使文件未被顶层引用也会加入源码列表。Yosys 和 Vivado 设计文件集使用全部设计源码；Icarus 和 Vivado 仿真文件集还包含全部仿真源码。`top-symbol` 直接传给工具链，不用于筛选源码。Vivado 通过 `update_compile_order` 确定编译顺序；Icarus/Yosys 接收按路径排列的文件列表，package 等对顺序有要求的源码需自行组织文件名。
 
-不再读取每文件的 import/export TOML。已有项目可删除源码旁的符号 TOML，再运行 `buildsys model` 检查实际源码引用；示例与 `init` 模板已迁移。
+不读取每文件的 import/export TOML，也不分析源码引用。可运行 `buildsys model` 检查扫描到的源码路径。
 
-宏和 include 搜索目录通过可选的项目级配置共享给解析器、Icarus、Yosys 和 Vivado：
+宏和 include 搜索目录通过可选的项目级配置共享给 Icarus、Yosys 和 Vivado：
 
 ```toml
 [hdl]
@@ -249,13 +249,9 @@ include-dirs = ["src/include"]
 defines = { FEATURE_ENABLED = "1", EMPTY_MACRO = "" }
 ```
 
-缺省为空。include 目录必须存在并位于项目内，相对路径以项目根目录为基准。宏值必须是单行字符串；空字符串定义空宏，`__VCD_FILE__` 保留给仿真输出路径。include 使用源文件所在目录和显式搜索目录；`.vh` / `.svh` 只经 include 处理，模型记录传递包含的文件。Vivado 工程将其加入对应文件集并标记头文件类型。宏定义不应依赖其他源文件的编译顺序。
+缺省为空。include 目录必须存在并位于项目内，相对路径以项目根目录为基准。宏值必须是单行字符串；空字符串定义空宏，`__VCD_FILE__` 保留给仿真输出路径。`.vh` / `.svh` 不作为独立源码加入列表，由编译器通过 include 搜索目录处理，不再自动发现或导出头文件。宏定义不应依赖其他源文件的编译顺序。
 
-解析采用 SystemVerilog 模式处理 `.v` 与 `.sv`，与现有工具链选项一致。静态分析保守收集 generate 各分支的依赖，不执行完整 elaboration，不提供目标级宏覆盖或外部 IP 自动发现；工具隐式宏导致的依赖变体需要用户通过统一配置和源码管理。解析器支持的语法不等于编译器支持的语法：Icarus 与 Yosys 的 SystemVerilog 子集有限，Vivado 也以安装版本为准；本次不引入新的综合前端。
-
-预处理或语法错误会给出源码路径、行列和原因。仅在执行 model 阶段加载 pyslang；安装、补全、清理和 Yosys 烧录无需加载解析器。Vivado 阶段需要解析器以检查工程快照。
-
-Windows 下固定版本 pyslang 8.0.0 支持中文源码路径和 include 搜索目录，但 include 指令中的文件名需使用 ASCII 字符；该版本不能正确查找包含中文字符的 include 文件名。
+工具链仍以 SystemVerilog 模式处理 `.v` 与 `.sv`。源码预处理、语法和符号检查由 Icarus、Yosys 或 Vivado 执行，各自支持的语法以安装版本为准。
 
 ## FPGA 综合, 实现, 比特流生成与烧录
 
@@ -354,7 +350,7 @@ PYTHONPATH = ["~/opt/fpga/ego1/src/prjxray"]
 
 导出成功后，buildsys 在 `build/vivado/<根级id>/.buildsys/model.json` 保存生成工程所用的 model 快照。所有 `xpr-*` 阶段及对应通用命令都会先重新建模并比较快照；工程或快照缺失、快照损坏或 model 不一致时，自动重新生成整个 XPR，再执行所选阶段。快照相符时复用工程，保留 XPR 和快照的修改时间。
 
-快照包含全部设计和仿真的源码依赖、头文件列表、顶层、FPGA part、约束路径、timescale、include 搜索目录及宏定义。普通源码或约束内容修改且 model 未变时，由 Vivado 的 run 刷新机制处理。导出开始前使旧快照失效，仅在成功后原子替换快照；导出失败时停止当前阶段，下次调用会重试导出。Vivado 的 `.runs`、`.sim`、日志和 bitstream 位于工程目录，buildsys 每次成功执行后报告实际绝对路径。
+快照包含全部源码路径及设计/仿真目录分类、顶层、FPGA part、约束路径、timescale、include 搜索目录及宏定义。增加、移除或移动源码时重新导出；源码引用、头文件或约束内容变化由 Vivado 的刷新机制处理。导出开始前使旧快照失效，仅在成功后原子替换快照；导出失败时停止当前阶段，下次调用会重试导出。Vivado 的 `.runs`、`.sim`、日志和 bitstream 位于工程目录，buildsys 每次成功执行后报告实际绝对路径。
 
 ```bat
 buildsys.bat xpr-simulation <simulation-id>
