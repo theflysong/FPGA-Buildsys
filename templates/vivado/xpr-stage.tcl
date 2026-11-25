@@ -57,14 +57,22 @@ proc buildsys::ensure_run {name phase} {
     if {$missing_bitstream || $phase ne "bitstream" || ![run_valid $name implementation]} {
         reset_run $name
     }
-    if {$phase eq "bitstream"} {
-        launch_runs $name -to_step write_bitstream
-    } else {
-        launch_runs $name
-    }
-    wait_on_run $name
-    if {![run_valid $name $phase]} {
-        error "Vivado run '$name' did not complete $phase successfully: [get_property STATUS [run_object $name]]"
+    set started [clock milliseconds]
+    if {[catch {
+        if {$phase eq "bitstream"} {
+            launch_runs $name -to_step write_bitstream
+        } else {
+            launch_runs $name
+        }
+        wait_on_run $name
+        if {![run_valid $name $phase]} {
+            error "Vivado run '$name' did not complete $phase successfully: [get_property STATUS [run_object $name]]"
+        }
+    } message options]} {
+        if {![catch {get_property DIRECTORY [run_object $name]} directory] && $directory ne ""} {
+            puts "BUILDSYS_FAILED_RUN_LOGS $started $directory"
+        }
+        return -options $options $message
     }
 }
 

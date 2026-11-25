@@ -10,6 +10,9 @@ from models import ImplementationProgram, Program, ProgrammingTarget, Project, S
 from util import BUILDSYS_DIR, render_template
 
 
+REPORT_SEPARATOR = "=" * 60
+
+
 def label(kind: str, identifier: str) -> str:
     return f"constraints ({identifier}, input)" if kind == "constraints" else f"{kind} ({identifier})"
 
@@ -31,10 +34,10 @@ def target_artifacts(target, *, waveforms: bool = True, stage: str = "bitstream"
 def report(entries: list[tuple[str, Path]]) -> None:
     existing = list(dict.fromkeys((kind, path.resolve()) for kind, path in entries if path.exists()))
     if existing:
-        print("=" * 60, flush=True)
+        print(REPORT_SEPARATOR, flush=True)
         for kind, path in existing:
             print(f"The path of {kind}: {path}", flush=True)
-        print("=" * 60, flush=True)
+        print(REPORT_SEPARATOR, flush=True)
 
 
 def shell_report(project: Project, entries: list[tuple[str, Path]]) -> str:

@@ -8,10 +8,16 @@ from pathlib import Path
 import subprocess
 import sys
 
+from artifacts import REPORT_SEPARATOR
 from planner import Planner
 from task import COMMANDS
 from toolchains import ROUTED_COMMANDS, resolve_command
 from util import ConfigError
+
+
+VIVADO_FAILURE_SUMMARY_COMMANDS = {
+    "xpr-simulation", "xpr-synthesis", "xpr-implementation", "xpr-bitstream",
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -22,10 +28,11 @@ def main(argv: list[str] | None = None) -> int:
     probe.add_argument("command", nargs="?")
     preliminary, _ = probe.parse_known_args(argv)
     workflows = dict(COMMANDS)
+    resolved_command = preliminary.command
     if preliminary.command in ROUTED_COMMANDS and preliminary.project is not None:
         try:
-            command = resolve_command(preliminary.project.expanduser().resolve(), preliminary.command)
-            workflows[preliminary.command] = COMMANDS[command]
+            resolved_command = resolve_command(preliminary.project.expanduser().resolve(), preliminary.command)
+            workflows[preliminary.command] = COMMANDS[resolved_command]
         except (ConfigError, OSError) as exc:
             if not any(option in argv for option in ("-h", "--help")):
                 print(f"error: {exc}", file=sys.stderr)
@@ -54,6 +61,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             return workflow.run(arguments)
     except (ConfigError, OSError, subprocess.CalledProcessError) as exc:
+        if resolved_command in VIVADO_FAILURE_SUMMARY_COMMANDS:
+            sys.stdout.flush()
+            print(f"\n{REPORT_SEPARATOR}", file=sys.stderr)
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0

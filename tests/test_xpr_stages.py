@@ -76,12 +76,13 @@ class XprStageTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=f"{self.tools}{os.pathsep}{os.environ['PATH']}",
                         XPR_CALLS=str(self.calls_path))
 
-    def cli(self, command, *args, state=None, target="core"):
+    def cli(self, command, *args, state=None, target="core", merge_output=False):
         self.calls_path.unlink(missing_ok=True)
         result = subprocess.run(
             [sys.executable, "-B", str(ENTRY), "--project", str(self.root), command, *(args if command in {"simulate", "xpr-simulation"} else (target, *args))],
             cwd=self.root, env=dict(self.env, XPR_FAKE_STATE=json.dumps(state or {})),
-            capture_output=True, text=True, timeout=20,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT if merge_output else subprocess.PIPE,
+            text=True, timeout=20,
         )
         self.assertEqual(self.xpr.read_text(), "existing project - never replace")
         if result.returncode == 0 and command not in {"clean", "cleandist"}:
@@ -218,6 +219,59 @@ class XprStageTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("testbench assertion failed", result.stderr)
         self.assertNotIn("The path of", result.stdout)
+
+    def test_failed_stages_end_with_error_summary(self):
+        for stage, shared, state, detail in (
+            ("synthesis", "synthesis", {"fail_run": "synth_core"}, "did not complete synthesis successfully"),
+            ("implementation", "implementation", {"fail_run": "impl_core"}, "did not complete implementation successfully"),
+            ("bitstream", "bitstream", {"omit_bitstream": True}, "Bitstream file is missing"),
+            ("simulation", "simulate", {"simulation_fatal": True}, "testbench assertion failed"),
+        ):
+            for command in (f"xpr-{stage}", shared):
+                with self.subTest(command=command):
+                    args = ("first",) if stage == "simulation" else ()
+                    result = self.cli(command, *args, state=state, merge_output=True)
+                    self.assertEqual(result.returncode, 1, result.stdout)
+                    _, separator, summary = result.stdout.partition("=" * 60 + "\n")
+                    self.assertTrue(separator, result.stdout)
+                    self.assertTrue(summary.startswith(f"error: Vivado xpr-{stage} failed:\n"), summary)
+                    self.assertIn(detail, summary)
+                    self.assertTrue(summary.splitlines()[-1].endswith(".log"), summary)
+
+    def test_failure_summary_reads_the_failed_run_log(self):
+        directory = self.root / "custom run {$[]};"
+        source = self.root / "src/top.sv"
+        diagnostic = f"ERROR: [Synth 8-2715] syntax error near clk [{source.as_posix()}:101]"
+        for stage, run, step, log_name in (
+            ("implementation", "synth_core", "synth_design", "top.vds"),
+            ("implementation", "impl_core", "route_design", "top.vdi"),
+            ("bitstream", "impl_core", "write_bitstream", "top.vdi"),
+        ):
+            with self.subTest(step=step):
+                state = {"fail_run": run, "fail_step": step, "runs": {run: {"DIRECTORY": str(directory)}},
+                         "run_logs": {"runme.log": "*** Running vivado\n", log_name: diagnostic + "\n"}}
+                result = self.cli(stage, state=state)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertEqual(result.stderr.strip().splitlines()[2].strip(), diagnostic)
+                self.assertIn(str(directory / log_name), result.stderr)
+                self.assertIn(f"run '{run}' did not complete", result.stderr)
+                self.assertNotIn("BUILDSYS_FAILED_RUN_LOGS", result.stdout)
+
+    def test_simulation_summary_reports_current_source_error_before_wrapper_errors(self):
+        directory = self.xpr.with_suffix(".sim") / "sim_first/behav/xsim"
+        directory.mkdir(parents=True)
+        old_log = directory / "simulate.log"
+        old_log.write_text("ERROR: old simulation error [stale.sv:42]\n", encoding="utf-8")
+        os.utime(old_log, (1, 1))
+        diagnostic = "ERROR: [VRFC 10-3180] cannot find port [sim/first.sv:16]"
+        result = self.cli("simulate", "first", state={
+            "elaborate_log": diagnostic + "\n",
+            "log": "\n".join(f"ERROR: wrapper error {index}" for index in range(6)),
+        })
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.stderr.strip().splitlines()[2].strip(), diagnostic)
+        self.assertIn(str(directory / "elaborate.log"), result.stderr)
+        self.assertNotIn("stale.sv", result.stderr)
 
     def test_run_dependencies_and_bitstream_chain(self):
         for stage, expected in (

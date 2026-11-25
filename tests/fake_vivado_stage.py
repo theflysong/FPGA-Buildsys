@@ -66,8 +66,12 @@ def dispatch(name, *args):
         if name == "wait_on_run":
             run = args[0]
             step = pending[run]
-            if state.get("fail_run") == run:
+            if state.get("fail_run") == run and state.get("fail_step", step) == step:
                 runs[run].update(STATUS=f"{step} ERROR", PROGRESS="42%", NEEDS_REFRESH="0")
+                directory = Path(runs[run]["DIRECTORY"])
+                directory.mkdir(parents=True, exist_ok=True)
+                for filename, content in state.get("run_logs", {}).items():
+                    (directory / filename).write_text(content, encoding="utf-8")
             else:
                 runs[run].update(STATUS=f"{step} Complete!", PROGRESS="100%", NEEDS_REFRESH="0")
                 runs[run].update(state.get("after_wait", {}))
@@ -85,6 +89,9 @@ def dispatch(name, *args):
         if name == "launch_simulation":
             directory = Path(str(tcl.getvar("::buildsys::simulation_directory")))
             directory.mkdir(parents=True, exist_ok=True)
+            if content := state.get("elaborate_log"):
+                (directory / "elaborate.log").write_text(content, encoding="utf-8")
+                return ("error", "launch_simulation failed")
             (directory / "top.wdb").touch()
             if state.get("vcd"):
                 (directory / "top.vcd").touch()

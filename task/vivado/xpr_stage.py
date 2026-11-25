@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 from models import Project, XprStageTarget
 from .xpr import ensure_current, tcl_word
@@ -16,6 +17,38 @@ from util import ConfigError, write_template
 
 
 ERROR_LINE = re.compile(r"^\s*(?:ERROR|FATAL)(?:\s*:|\s+\[)", re.IGNORECASE)
+SOURCE_LOCATION = re.compile(r":\d+(?::\d+)?\]$")
+RUN_LOGS = ("*.vds", "*.vdi", "runme.log")
+SIMULATION_LOGS = ("xvlog.log", "xvhdl.log", "compile.log", "elaborate.log", "simulate.log")
+
+
+def _log_errors(path: Path, since_ns: int = 0) -> list[str]:
+    try:
+        if path.stat().st_mtime_ns >= since_ns:
+            with path.open(encoding="utf-8", errors="replace") as stream:
+                return [line.strip() for line in stream if ERROR_LINE.match(line)]
+    except OSError:
+        pass
+    return []
+
+
+def _failure_detail(errors: list[str], status: int, completed: bool, log: Path,
+                    diagnostic_directory: Path | None, since_ns: int, *, simulation: bool) -> str:
+    diagnostics: list[str] = []
+    logs: list[Path] = []
+    if diagnostic_directory is not None:
+        patterns = SIMULATION_LOGS if simulation else RUN_LOGS
+        try:
+            paths = [path for pattern in patterns for path in sorted(diagnostic_directory.glob(pattern))]
+        except OSError:
+            paths = []
+        for path in paths:
+            if messages := _log_errors(path, since_ns):
+                diagnostics.extend(messages)
+                logs.append(path)
+    messages = sorted(dict.fromkeys([*diagnostics, *errors]), key=lambda line: SOURCE_LOCATION.search(line) is None)
+    detail = messages[:4] or [f"exit status {status}, completion={completed}"]
+    return "\n  ".join([*detail, *(f"See {path}" for path in [*logs, log])])
 
 
 def _environment() -> dict[str, str]:
@@ -55,6 +88,8 @@ def run_stage(target: XprStageTarget, stage: str, *,
     completed = False
     bitstream: Path | None = None
     artifacts: list[tuple[str, Path]] = []
+    diagnostic_directory = Path(variables["simulation_directory"]) if stage == "simulation" else None
+    started_ns = diagnostic_since_ns = time.time_ns()
     try:
         with subprocess.Popen(command, cwd=target.xpr.parent, env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -63,6 +98,11 @@ def run_stage(target: XprStageTarget, stage: str, *,
             for line in process.stdout:
                 if line.strip() == "BUILDSYS_XPR_COMPLETE":
                     completed = True
+                elif line.startswith("BUILDSYS_FAILED_RUN_LOGS "):
+                    started, _, path = line.removeprefix("BUILDSYS_FAILED_RUN_LOGS ").rstrip("\r\n").partition(" ")
+                    if started.isdecimal() and path:
+                        diagnostic_since_ns = int(started) * 1_000_000
+                        diagnostic_directory = target.xpr.parent / path
                 elif line.startswith("BUILDSYS_BITSTREAM "):
                     bitstream = Path(line[len("BUILDSYS_BITSTREAM "):].strip())
                     artifacts.append(("bitstream", bitstream))
@@ -78,13 +118,11 @@ def run_stage(target: XprStageTarget, stage: str, *,
             status = process.wait()
     except OSError as exc:
         raise ConfigError(f"Cannot start Vivado: {exc}; script retained at {script}") from exc
-    if log.is_file():
-        for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
-            if ERROR_LINE.match(line) and line.strip() not in errors:
-                errors.append(line.strip())
+    errors.extend(_log_errors(log, started_ns))
     if status or errors or not completed:
-        detail = "; ".join(errors[-4:]) or f"exit status {status}, completion={completed}"
-        raise ConfigError(f"Vivado xpr-{stage} failed: {detail}; see {log}")
+        detail = _failure_detail(errors, status, completed, log, diagnostic_directory,
+                                 diagnostic_since_ns, simulation=stage == "simulation")
+        raise ConfigError(f"Vivado xpr-{stage} failed:\n  {detail}")
     if stage in {"bitstream", "program"} and (bitstream is None or not bitstream.is_file()):
         raise ConfigError(f"Vivado did not report an existing bitstream; {variables['bitstream_hint']}; see {log}")
     return replace(target, bitstream=bitstream, artifacts=tuple(artifacts))
